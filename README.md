@@ -71,7 +71,7 @@ npm run dev
 
 ## 原生 helper 编译说明
 
-原生部分源码位于 [`native/src/main.cpp`](/d:/code/tools/SelectPop/native/src/main.cpp)，构建脚本位于 [`scripts/build-native.mjs`](/d:/code/tools/SelectPop/scripts/build-native.mjs)。
+原生部分源码位于 [`native/src/main.cpp`](native/src/main.cpp)，构建脚本位于 [`scripts/build-native.mjs`](scripts/build-native.mjs)。
 
 构建脚本会执行以下流程：
 
