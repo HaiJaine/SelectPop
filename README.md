@@ -39,7 +39,7 @@ SelectPop 由三部分组成：
 C:\dev_env\mingw64
 ```
 
-如果你的环境路径不同，需要修改 [`scripts/build-native.mjs`](/d:/code/tools/SelectPop/scripts/build-native.mjs) 里的 `mingwBin`、`CMAKE_C_COMPILER` 和 `CMAKE_CXX_COMPILER`。
+如果你的环境路径不同，需要修改 [`scripts/build-native.mjs`](scripts/build-native.mjs) 里的 `mingwBin`、`CMAKE_C_COMPILER` 和 `CMAKE_CXX_COMPILER`。
 
 ## 从源码安装与启动
 
