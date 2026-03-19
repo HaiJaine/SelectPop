@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"D:/code/tools/SelectPop/native/build-mingw/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

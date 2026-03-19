@@ -1,0 +1,34 @@
+appId: com.selectpop.portable
+productName: SelectPop
+directories:
+  output: dist/build
+  buildResources: assets
+electronDist: node_modules/electron/dist
+files:
+  - package.json
+  - main/**/*
+  - preload/**/*
+  - renderer/**/*
+  - shared/**/*
+  - assets/**/*
+asar: true
+npmRebuild: false
+asarUnpack:
+  - assets/powershell/**/*
+extraResources:
+  - from: assets/powershell
+    to: powershell
+  - from: native/bin
+    to: native
+  - from: assets/PORTABLE-README.txt
+    to: .
+publish: null
+win:
+  executableName: SelectPop
+  icon: assets/app-icon.ico
+  target:
+    - target: portable
+      arch:
+        - x64
+portable:
+  artifactName: SelectPop.exe

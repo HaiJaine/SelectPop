@@ -1,0 +1,815 @@
+import { BrowserWindow, screen } from 'electron';
+import { clamp, createId } from './utils.js';
+import { resolveAppFile } from './paths.js';
+import {
+  clampWindowBoundsToDisplay,
+  clampWindowBoundsToWorkArea,
+  extractWindowBounds,
+  normalizeWindowBounds
+} from './window-bounds.js';
+import { AI_SYSTEM_PROMPT } from './defaults.js';
+
+const AI_WINDOW_MOUSE_GAP_X = 12;
+const AI_WINDOW_MOUSE_GAP_Y = 8;
+const AI_WINDOW_COLLISION_SHIFT_X = 28;
+const AI_WINDOW_COLLISION_SHIFT_Y = 22;
+const AI_WINDOW_COLLISION_SHIFT_ATTEMPTS = 16;
+const AI_WINDOW_LAYER_NORMAL = 'normal';
+const AI_WINDOW_LAYER_PINNED_BACKGROUND = 'pinned-background';
+const AI_WINDOW_LAYER_FOREGROUND_TRANSIENT = 'foreground-transient';
+const AI_WINDOW_ALWAYS_ON_TOP_LEVELS = {
+  [AI_WINDOW_LAYER_NORMAL]: null,
+  [AI_WINDOW_LAYER_PINNED_BACKGROUND]: 'floating',
+  [AI_WINDOW_LAYER_FOREGROUND_TRANSIENT]: 'screen-saver'
+};
+
+function getAnchorPoint(anchorBounds) {
+  const fallbackPoint = screen.getCursorScreenPoint();
+  return anchorBounds || {
+    x: fallbackPoint.x,
+    y: fallbackPoint.y,
+    width: 0,
+    height: 0
+  };
+}
+
+function calcAiWindowPosition(anchorBounds, requestedWidth, requestedHeight) {
+  const anchor = getAnchorPoint(anchorBounds);
+  const display = screen.getDisplayNearestPoint({ x: anchor.x, y: anchor.y });
+  const { workArea } = display;
+
+  let left = anchor.x + anchor.width + AI_WINDOW_MOUSE_GAP_X;
+  let top = anchor.y + AI_WINDOW_MOUSE_GAP_Y;
+
+  if (left + requestedWidth > workArea.x + workArea.width) {
+    left = anchor.x + anchor.width - requestedWidth;
+  }
+
+  if (left < workArea.x) {
+    left = workArea.x + 8;
+  }
+
+  if (top + requestedHeight > workArea.y + workArea.height) {
+    top = workArea.y + workArea.height - requestedHeight - 8;
+  }
+
+  if (top < workArea.y) {
+    top = workArea.y + 8;
+  }
+
+  return clampWindowBoundsToWorkArea(
+    {
+      x: Math.round(left),
+      y: Math.round(top),
+      width: requestedWidth,
+      height: requestedHeight
+    },
+    workArea
+  );
+}
+
+function isSameTopLeft(leftBounds, rightBounds) {
+  return leftBounds.x === rightBounds.x && leftBounds.y === rightBounds.y;
+}
+
+function shiftBounds(bounds, offsetX, offsetY) {
+  return {
+    ...bounds,
+    x: bounds.x + offsetX,
+    y: bounds.y + offsetY
+  };
+}
+
+function resolveEffectivePrompt(provider, prompt) {
+  return String(prompt || provider?.prompt || AI_SYSTEM_PROMPT).trim() || AI_SYSTEM_PROMPT;
+}
+
+function buildUiConfigPayload(config = {}) {
+  return {
+    aiWindowFontScale: Number(config?.ui?.aiWindowFontScale || 100)
+  };
+}
+
+function buildWindowSessions(providers) {
+  return providers.map((provider) => ({
+    providerId: provider.id,
+    providerName: provider.name,
+    model: provider.model
+  }));
+}
+
+export class AiWindowManager {
+  constructor(
+    getConfig,
+    getProviderById,
+    {
+      startAiTranslation,
+      logger = null,
+      saveBounds = null,
+      translationCache = null,
+      onStateChanged = null
+    } = {}
+  ) {
+    this.getConfig = getConfig;
+    this.getProviderById = getProviderById;
+    this.startAiTranslation = startAiTranslation;
+    this.logger = logger;
+    this.saveBounds = saveBounds;
+    this.translationCache = translationCache;
+    this.onStateChanged = onStateChanged;
+    this.records = new Map();
+  }
+
+  notifyStateChanged(reason = '') {
+    this.onStateChanged?.({
+      reason,
+      windowCount: this.getWindowCount(),
+      activeRequestCount: this.getActiveRequestCount()
+    });
+  }
+
+  getWindowCount() {
+    return Array.from(this.records.values())
+      .filter((record) => record.window && !record.window.isDestroyed())
+      .length;
+  }
+
+  getActiveRequestCount() {
+    return Array.from(this.records.values())
+      .reduce((total, record) => total + record.requests.size, 0);
+  }
+
+  canRelease() {
+    return this.getWindowCount() === 0 && this.getActiveRequestCount() === 0;
+  }
+
+  getBaseLayer(record) {
+    return record?.pinned === true ? AI_WINDOW_LAYER_PINNED_BACKGROUND : AI_WINDOW_LAYER_NORMAL;
+  }
+
+  applyLayer(record, layer, { moveTop = false } = {}) {
+    if (!record?.window || record.window.isDestroyed()) {
+      return;
+    }
+
+    record.layer = layer;
+    const alwaysOnTopLevel = AI_WINDOW_ALWAYS_ON_TOP_LEVELS[layer];
+
+    if (alwaysOnTopLevel) {
+      record.window.setAlwaysOnTop(true, alwaysOnTopLevel);
+    } else {
+      record.window.setAlwaysOnTop(false);
+    }
+
+    if (moveTop) {
+      record.window.moveTop();
+    }
+  }
+
+  restoreBaseLayer(record, options = {}) {
+    this.applyLayer(record, this.getBaseLayer(record), options);
+  }
+
+  demoteForegroundRecords(excludeWindowId = null) {
+    for (const record of this.records.values()) {
+      if (!record?.window || record.window.isDestroyed() || record.window.webContents.id === excludeWindowId) {
+        continue;
+      }
+
+      if (record.layer === AI_WINDOW_LAYER_FOREGROUND_TRANSIENT) {
+        this.restoreBaseLayer(record);
+      }
+    }
+  }
+
+  promoteRecord(record, { moveTop = true } = {}) {
+    if (!record?.window || record.window.isDestroyed()) {
+      return;
+    }
+
+    this.demoteForegroundRecords(record.window.webContents.id);
+    this.applyLayer(record, AI_WINDOW_LAYER_FOREGROUND_TRANSIENT, { moveTop });
+  }
+
+  getVisibleWindowBounds({ excludeWindowId = null } = {}) {
+    return Array.from(this.records.values())
+      .filter((record) =>
+        record.window
+        && !record.window.isDestroyed()
+        && record.window.webContents.id !== excludeWindowId
+        && record.window.isVisible()
+      )
+      .map((record) => extractWindowBounds(record.window));
+  }
+
+  getVisibleWindowBoundsForDisplay(display, { excludeWindowId = null } = {}) {
+    return this.getVisibleWindowBounds({ excludeWindowId }).filter((bounds) => {
+      const centerPoint = {
+        x: bounds.x + Math.round(bounds.width / 2),
+        y: bounds.y + Math.round(bounds.height / 2)
+      };
+      return screen.getDisplayNearestPoint(centerPoint).id === display.id;
+    });
+  }
+
+  resolveWindowBounds(anchorBounds, requestedWidth, requestedHeight, excludeWindowId = null) {
+    const anchor = getAnchorPoint(anchorBounds);
+    const display = screen.getDisplayNearestPoint({ x: anchor.x, y: anchor.y });
+    const occupiedBounds = this.getVisibleWindowBoundsForDisplay(display, { excludeWindowId });
+    let nextBounds = calcAiWindowPosition(anchorBounds, requestedWidth, requestedHeight);
+
+    for (let attempt = 0; attempt < AI_WINDOW_COLLISION_SHIFT_ATTEMPTS; attempt += 1) {
+      const hasSameTopLeft = occupiedBounds.some((existingBounds) => isSameTopLeft(nextBounds, existingBounds));
+
+      if (!hasSameTopLeft) {
+        return nextBounds;
+      }
+
+      nextBounds = clampWindowBoundsToWorkArea(
+        shiftBounds(nextBounds, AI_WINDOW_COLLISION_SHIFT_X, AI_WINDOW_COLLISION_SHIFT_Y)
+        ,
+        display.workArea
+      );
+    }
+
+    return nextBounds;
+  }
+
+  positionRecordNearAnchor(record, anchorBounds) {
+    if (!record?.window || record.window.isDestroyed()) {
+      return;
+    }
+
+    const bounds = extractWindowBounds(record.window);
+    const nextBounds = this.resolveWindowBounds(
+      anchorBounds,
+      bounds.width,
+      bounds.height,
+      record.window.webContents.id
+    );
+
+    record.suspendPersist = true;
+    record.window.setBounds(nextBounds);
+    setTimeout(() => {
+      if (!record.window || record.window.isDestroyed()) {
+        return;
+      }
+
+      record.suspendPersist = false;
+    }, 0);
+  }
+
+  async createWindow(anchorBounds) {
+    const config = this.getConfig();
+    const requestedBounds = normalizeWindowBounds(config.ui.aiWindowBounds, {
+      minWidth: 320,
+      minHeight: 260,
+      width: config.ui.aiWindowBounds.width,
+      height: config.ui.aiWindowBounds.height
+    });
+    const positionedBounds = this.resolveWindowBounds(
+      anchorBounds,
+      requestedBounds.width,
+      requestedBounds.height
+    );
+    const window = new BrowserWindow({
+      ...positionedBounds,
+      minWidth: 320,
+      minHeight: 260,
+      frame: false,
+      show: false,
+      resizable: true,
+      movable: true,
+      backgroundColor: '#f7f4ef',
+      webPreferences: {
+        preload: resolveAppFile('preload', 'ai-window.cjs'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        spellcheck: false
+      }
+    });
+
+    const record = {
+      window,
+      pinned: false,
+      layer: AI_WINDOW_LAYER_NORMAL,
+      requests: new Map(),
+      currentPayload: null,
+      persistTimer: null,
+      suspendPersist: true,
+      blurCloseUntil: 0,
+      readyPromise: window.loadFile(resolveAppFile('renderer', 'ai-window', 'index.html'))
+    };
+
+    this.records.set(window.webContents.id, record);
+    this.notifyStateChanged('window-created');
+    this.logger?.info('AI BrowserWindow created.', {
+      windowId: window.webContents.id,
+      bounds: positionedBounds
+    });
+
+    window.on('close', () => {
+      this.flushPersist(record);
+    });
+    window.on('closed', () => {
+      this.abortAll(record);
+      if (record.persistTimer) {
+        clearTimeout(record.persistTimer);
+      }
+      this.logger?.info('AI BrowserWindow closed.', {
+        windowId: window.webContents.id
+      });
+      this.records.delete(window.webContents.id);
+      this.notifyStateChanged('window-closed');
+    });
+    window.on('move', () => this.schedulePersist(record));
+    window.on('resize', () => this.schedulePersist(record));
+    window.on('focus', () => {
+      if (record.window.isDestroyed()) {
+        return;
+      }
+
+      this.promoteRecord(record);
+    });
+    window.on('blur', () => {
+      if (record.window.isDestroyed()) {
+        return;
+      }
+
+      if (Date.now() < record.blurCloseUntil) {
+        return;
+      }
+
+      if (record.pinned) {
+        this.restoreBaseLayer(record);
+        return;
+      }
+
+      if (this.getConfig()?.ui?.aiWindowCloseOnBlur !== true) {
+        return;
+      }
+
+      record.window.close();
+    });
+
+    await record.readyPromise;
+    window.webContents.send('ai:ui-config', buildUiConfigPayload(config));
+    setTimeout(() => {
+      record.suspendPersist = false;
+    }, 0);
+    return record;
+  }
+
+  getReusableRecord() {
+    for (const record of this.records.values()) {
+      if (!record.window.isDestroyed() && !record.pinned) {
+        return record;
+      }
+    }
+
+    return null;
+  }
+
+  getRecordByWebContents(webContents) {
+    return this.records.get(webContents.id) || null;
+  }
+
+  async openTranslation({ text, providerId, providerIds = [], prompt = '', anchorBounds }) {
+    const resolvedProviderIds = Array.from(
+      new Set(
+        (Array.isArray(providerIds) && providerIds.length ? providerIds : [providerId])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const providers = resolvedProviderIds
+      .map((id) => this.getProviderById(id))
+      .filter(Boolean);
+
+    if (!providers.length) {
+      throw new Error('未找到对应的 AI 提供商，请先在设置中配置。');
+    }
+
+    let record = this.getReusableRecord();
+
+    if (!record) {
+      record = await this.createWindow(anchorBounds);
+    } else {
+      this.positionRecordNearAnchor(record, anchorBounds);
+    }
+
+    this.abortAll(record);
+    const sessionId = createId('ai-session');
+    const promptText = String(prompt || '');
+    record.currentPayload = {
+      sessionId,
+      text,
+      activeProviderId: providers[0].id,
+      orderedProviderIds: providers.map((provider) => provider.id),
+      sessions: providers.map((provider) => ({
+        providerId: provider.id,
+        prompt: promptText
+      }))
+    };
+
+    record.blurCloseUntil = Date.now() + 450;
+    this.promoteRecord(record);
+    record.window.show();
+    record.window.focus();
+    this.notifyStateChanged('translation-opened');
+    this.logger?.info('Opening AI translation window.', {
+      sessionId,
+      providerIds: providers.map((provider) => provider.id),
+      sessionCount: providers.length,
+      activeProviderId: providers[0].id,
+      textLength: text.length
+    });
+    record.window.webContents.send('ai:session', {
+      sessionId,
+      text,
+      activeProviderId: providers[0].id,
+      pinned: record.pinned,
+      sessions: buildWindowSessions(providers)
+    });
+
+    for (const provider of providers) {
+      void this.startRequest(record, sessionId, provider, text, promptText, {
+        useCache: true,
+        preserveExistingOnStart: false,
+        orderedProviderIds: providers.map((item) => item.id)
+      });
+    }
+  }
+
+  async startRequest(
+    record,
+    sessionId,
+    provider,
+    text,
+    prompt,
+    { attempt = 1, useCache = true, preserveExistingOnStart = false, orderedProviderIds = [] } = {}
+  ) {
+    if (!record || record.window.isDestroyed()) {
+      return;
+    }
+
+    if (typeof this.startAiTranslation !== 'function') {
+      throw new Error('AI translation runner is not available.');
+    }
+
+    const previousRequest = record.requests.get(provider.id);
+    previousRequest?.abortController?.abort();
+
+    const abortController = new AbortController();
+    const startedAt = Date.now();
+    record.requests.set(provider.id, { abortController, sessionId, text, prompt });
+    this.notifyStateChanged('request-started');
+
+    const effectivePrompt = resolveEffectivePrompt(provider, prompt);
+    const cacheKey = this.translationCache?.createKey({
+      text,
+      provider,
+      orderedProviderIds,
+      prompt: effectivePrompt
+    });
+
+    if (useCache && cacheKey) {
+      const cachedEntry = this.translationCache?.get(cacheKey);
+
+      if (cachedEntry?.markdown) {
+        this.logger?.info('AI translation cache hit.', {
+          sessionId,
+          providerId: provider.id,
+          textLength: text.length
+        });
+        this.#sendIfCurrent(record, sessionId, 'ai:stream-start', {
+          providerId: provider.id,
+          providerName: provider.name,
+          model: provider.model,
+          startedAt,
+          attempt,
+          cached: true,
+          preserveExisting: false
+        });
+        this.#sendIfCurrent(record, sessionId, 'ai:chunk', {
+          providerId: provider.id,
+          chunk: cachedEntry.markdown,
+          cached: true
+        });
+        this.#sendIfCurrent(record, sessionId, 'ai:done', {
+          providerId: provider.id,
+          timeMs: 0,
+          tokens: cachedEntry.tokens || 0,
+          cached: true
+        });
+        record.requests.delete(provider.id);
+        return;
+      }
+    }
+
+    this.logger?.info('Starting AI translation request.', {
+      sessionId,
+      providerId: provider.id,
+      model: provider.model,
+      textLength: text.length,
+      attempt
+    });
+    this.#sendIfCurrent(record, sessionId, 'ai:stream-start', {
+      providerId: provider.id,
+      providerName: provider.name,
+      model: provider.model,
+      startedAt,
+      attempt,
+      preserveExisting: preserveExistingOnStart === true
+    });
+    let emittedMarkdown = '';
+    let firstChunkAt = 0;
+
+    try {
+      await this.startAiTranslation(
+        provider,
+        text,
+        prompt,
+        {
+          onChunk: (chunk) => {
+            if (!firstChunkAt) {
+              firstChunkAt = Date.now();
+              this.logger?.info('AI translation first chunk received.', {
+                sessionId,
+                providerId: provider.id,
+                firstChunkMs: firstChunkAt - startedAt
+              });
+            }
+            emittedMarkdown += chunk;
+            this.#sendIfCurrent(record, sessionId, 'ai:chunk', {
+              providerId: provider.id,
+              chunk
+            });
+          },
+          onDone: (tokens) => {
+            if (cacheKey && emittedMarkdown.trim()) {
+              this.translationCache?.set(cacheKey, {
+                providerId: provider.id,
+                providerName: provider.name,
+                orderedProviderIds,
+                text,
+                markdown: emittedMarkdown,
+                tokens,
+                model: provider.model
+              });
+            }
+            this.logger?.info('AI translation request completed.', {
+              sessionId,
+              providerId: provider.id,
+              timeMs: Date.now() - startedAt,
+              tokens
+            });
+            this.#sendIfCurrent(record, sessionId, 'ai:done', {
+              providerId: provider.id,
+              timeMs: Date.now() - startedAt,
+              tokens
+            });
+          }
+        },
+        abortController.signal
+      );
+    } catch (error) {
+      if (abortController.signal.aborted) {
+        this.logger?.warn('AI translation request aborted.', {
+          sessionId,
+          providerId: provider.id
+        });
+        this.#sendIfCurrent(record, sessionId, 'ai:aborted', {
+          providerId: provider.id
+        });
+        return;
+      }
+
+      if (attempt === 1) {
+        this.logger?.warn('AI translation request failed, retrying.', {
+          sessionId,
+          providerId: provider.id,
+          message: error instanceof Error ? error.message : String(error)
+        });
+        this.#sendIfCurrent(record, sessionId, 'ai:retrying', {
+          providerId: provider.id,
+          message: '首次请求失败，正在自动重试...'
+        });
+        await this.startRequest(record, sessionId, provider, text, prompt, {
+          attempt: 2,
+          useCache: false,
+          preserveExistingOnStart,
+          orderedProviderIds
+        });
+        return;
+      }
+
+      this.logger?.error('AI translation request failed.', {
+        sessionId,
+        providerId: provider.id,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      this.#sendIfCurrent(record, sessionId, 'ai:error', {
+        providerId: provider.id,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      const activeRequest = record.requests.get(provider.id);
+
+      if (activeRequest?.abortController === abortController) {
+        record.requests.delete(provider.id);
+        this.notifyStateChanged('request-finished');
+      }
+    }
+  }
+
+  async retry(webContents, providerId) {
+    const record = this.getRecordByWebContents(webContents);
+
+    if (!record?.currentPayload) {
+      return;
+    }
+
+    const targetProviderId =
+      String(providerId || '').trim() || record.currentPayload.activeProviderId || record.currentPayload.sessions[0]?.providerId;
+
+    const session = record.currentPayload.sessions.find((item) => item.providerId === targetProviderId);
+
+    if (!session) {
+      throw new Error('AI 会话不存在。');
+    }
+
+    const provider = this.getProviderById(session.providerId);
+
+    if (!provider) {
+      throw new Error('AI 提供商不存在。');
+    }
+
+    record.currentPayload.activeProviderId = session.providerId;
+    await this.startRequest(record, record.currentPayload.sessionId, provider, record.currentPayload.text, session.prompt, {
+      attempt: 1,
+      useCache: false,
+      preserveExistingOnStart: true,
+      orderedProviderIds: record.currentPayload.orderedProviderIds || []
+    });
+  }
+
+  abort(webContents, providerId = null) {
+    const record = this.getRecordByWebContents(webContents);
+
+    if (!record) {
+      return;
+    }
+
+    if (providerId) {
+      record.requests.get(providerId)?.abortController?.abort();
+      return;
+    }
+
+    this.abortAll(record);
+  }
+
+  abortAll(record) {
+    if (!record) {
+      return;
+    }
+
+    for (const request of record.requests.values()) {
+      request.abortController?.abort();
+    }
+
+    record.requests.clear();
+  }
+
+  resize(webContents, nextBounds) {
+    const record = this.getRecordByWebContents(webContents);
+
+    if (!record) {
+      return;
+    }
+
+    const bounds = record.window.getBounds();
+    const width = clamp(Number(nextBounds?.width || bounds.width), 320, 960);
+    const height = clamp(Number(nextBounds?.height || bounds.height), 260, 760);
+    record.window.setSize(width, height);
+  }
+
+  togglePin(webContents) {
+    const record = this.getRecordByWebContents(webContents);
+
+    if (!record) {
+      return false;
+    }
+
+    record.pinned = !record.pinned;
+    if (record.window.isFocused() || record.layer === AI_WINDOW_LAYER_FOREGROUND_TRANSIENT) {
+      this.promoteRecord(record);
+    } else {
+      this.restoreBaseLayer(record);
+    }
+    record.blurCloseUntil = Date.now() + 250;
+    record.window.webContents.send('ai:pinned', { pinned: record.pinned });
+    return record.pinned;
+  }
+
+  minimize(webContents) {
+    const record = this.getRecordByWebContents(webContents);
+
+    if (!record) {
+      return;
+    }
+
+    record.blurCloseUntil = Date.now() + 250;
+    record.window.minimize();
+  }
+
+  close(webContents) {
+    this.getRecordByWebContents(webContents)?.window.close();
+  }
+
+  handleDisplayMetricsChanged() {
+    for (const record of this.records.values()) {
+      if (!record.window || record.window.isDestroyed()) {
+        continue;
+      }
+
+      const nextBounds = clampWindowBoundsToDisplay(extractWindowBounds(record.window));
+      record.window.setBounds(nextBounds);
+      this.saveBounds?.(extractWindowBounds(record.window));
+    }
+  }
+
+  syncUiConfig(config) {
+    const payload = buildUiConfigPayload(config);
+
+    for (const record of this.records.values()) {
+      if (!record.window || record.window.isDestroyed()) {
+        continue;
+      }
+
+      record.window.webContents.send('ai:ui-config', payload);
+    }
+  }
+
+  dispose() {
+    for (const record of this.records.values()) {
+      this.abortAll(record);
+
+      if (record.persistTimer) {
+        clearTimeout(record.persistTimer);
+        record.persistTimer = null;
+      }
+
+      if (record.window && !record.window.isDestroyed()) {
+        record.window.destroy();
+      }
+    }
+
+    this.records.clear();
+    this.notifyStateChanged('disposed');
+  }
+
+  #sendIfCurrent(record, sessionId, channel, payload) {
+    if (!record || record.window.isDestroyed()) {
+      return;
+    }
+
+    if (record.currentPayload?.sessionId !== sessionId) {
+      return;
+    }
+
+    record.window.webContents.send(channel, payload);
+  }
+
+  schedulePersist(record) {
+    if (!record || record.suspendPersist || !record.window || record.window.isDestroyed()) {
+      return;
+    }
+
+    if (record.persistTimer) {
+      clearTimeout(record.persistTimer);
+    }
+
+    record.persistTimer = setTimeout(() => {
+      this.flushPersist(record);
+    }, 160);
+  }
+
+  flushPersist(record) {
+    if (!record) {
+      return;
+    }
+
+    if (record.persistTimer) {
+      clearTimeout(record.persistTimer);
+      record.persistTimer = null;
+    }
+
+    if (record.suspendPersist || !record.window || record.window.isDestroyed()) {
+      return;
+    }
+
+    this.saveBounds?.(extractWindowBounds(record.window));
+  }
+}

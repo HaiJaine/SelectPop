@@ -1,0 +1,3 @@
+C:\dev_env\cmake\bin\cmake.exe -E rm -f CMakeFiles\selectpop-native-helper.dir/objects.a
+C:\dev_env\mingw64\bin\ar.exe qc CMakeFiles\selectpop-native-helper.dir/objects.a @CMakeFiles\selectpop-native-helper.dir\objects1.rsp
+C:\dev_env\mingw64\bin\g++.exe -O3 -DNDEBUG -mwindows -static-libgcc -static-libstdc++ -Wl,--whole-archive CMakeFiles\selectpop-native-helper.dir/objects.a -Wl,--no-whole-archive -o D:\code\tools\SelectPop\native\bin\selectpop-native-helper.exe -Wl,--out-implib,libselectpop-native-helper.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\selectpop-native-helper.dir\linkLibs.rsp

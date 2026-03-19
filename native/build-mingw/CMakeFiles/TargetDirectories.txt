@@ -1,0 +1,3 @@
+D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/selectpop-native-helper.dir
+D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/edit_cache.dir
+D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/rebuild_cache.dir

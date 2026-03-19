@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SelectPop Settings</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <div class="window-drag-strip" aria-hidden="true"></div>
+    <div class="settings-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <div class="brand-title">SelectPop</div>
+            <div class="brand-subtitle">便携版设置中心</div>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button id="minimize-button" class="topbar-button" type="button">-</button>
+          <button id="close-button" class="topbar-button close" type="button">x</button>
+        </div>
+      </header>
+
+      <nav class="settings-nav" aria-label="设置导航">
+        <div class="settings-nav-track">
+          <button class="nav-button active" data-tab="tools" type="button">工具管理</button>
+          <button class="nav-button" data-tab="selection" type="button">划词设置</button>
+          <button class="nav-button" data-tab="providers" type="button">AI 提供商</button>
+          <button class="nav-button" data-tab="webdav" type="button">WebDAV 同步</button>
+        </div>
+      </nav>
+
+      <div class="layout">
+        <main id="content" class="content"></main>
+      </div>
+
+      <button id="add-item-button" class="sidebar-primary hidden" type="button" hidden aria-hidden="true" tabindex="-1">
+        添加工具
+      </button>
+
+      <div id="toast-stack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+      <div id="status-bar" class="status-bar"></div>
+      <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+      <aside id="drawer" class="drawer"></aside>
+    </div>
+
+    <script type="module" src="./settings.js"></script>
+  </body>
+</html>

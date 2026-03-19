@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SelectPop AI</title>
+    <link rel="stylesheet" href="./ai-window.css" />
+  </head>
+  <body>
+    <div class="window-drag-strip" aria-hidden="true"></div>
+    <div class="window-shell">
+      <header class="titlebar">
+        <div class="titlebar-brand">
+          <span class="titlebar-mark"></span>
+          <div>
+            <div class="titlebar-title">SelectPop</div>
+            <div class="titlebar-subtitle">AI 翻译</div>
+          </div>
+        </div>
+        <div class="titlebar-actions">
+          <button id="pin-button" class="titlebar-button" type="button" title="切换置顶">Pin</button>
+          <button id="minimize-button" class="titlebar-button" type="button" title="最小化">-</button>
+          <button id="close-button" class="titlebar-button close" type="button" title="关闭">x</button>
+        </div>
+      </header>
+
+      <section class="panel source-panel">
+        <div class="panel-header source-header">
+          <span class="panel-label">原文</span>
+          <button id="source-toggle" class="panel-toggle" type="button" aria-expanded="false">显示原文</button>
+        </div>
+        <article id="source-text" class="source-box" hidden></article>
+      </section>
+
+      <section class="panel result-panel">
+        <div class="result-panel-body">
+          <div class="result-toolbar">
+            <div class="result-toolbar-tabs">
+              <div id="session-tabs" class="session-tabs"></div>
+            </div>
+            <div class="result-toolbar-meta">
+              <span id="meta-text" class="meta-text"></span>
+            </div>
+          </div>
+          <div class="result-scroll-shell">
+            <article id="result-content" class="result-content">
+              <p class="placeholder">点击 AI 工具后将在这里显示翻译结果。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <footer class="panel footer-panel">
+        <div class="footer-bar">
+          <div class="footer-secondary-actions">
+            <button id="copy-markdown-button" class="footer-button subtle" type="button">复制 Markdown</button>
+          </div>
+          <div class="footer-primary-actions">
+            <button id="copy-button" class="footer-button primary" type="button">复制译文</button>
+            <button id="retry-button" class="footer-button" type="button">重新翻译</button>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script type="module" src="./ai-window.js"></script>
+  </body>
+</html>
