@@ -413,6 +413,38 @@ body {
   white-space: nowrap;
 }
 
+.setting-toggle-list {
+  display: grid;
+  gap: 12px;
+}
+
+.setting-toggle-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  align-items: center;
+  min-width: 0;
+}
+
+.setting-toggle-title {
+  min-width: 0;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.setting-toggle-item input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.setting-toggle-hint {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .checkbox-row input {
   width: 16px;
   height: 16px;
@@ -1245,6 +1277,15 @@ body {
 
   .checkbox-row.compact-row {
     white-space: normal;
+  }
+
+  .setting-toggle-item {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .setting-toggle-item input {
+    justify-self: start;
   }
 
   .input-action-row,

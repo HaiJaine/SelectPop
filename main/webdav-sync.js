@@ -258,6 +258,7 @@ export function buildComparableWebDavConfig(config) {
   deletePath(nextConfig, ['meta']);
   deletePath(nextConfig, ['ui', 'settingsBounds']);
   deletePath(nextConfig, ['ui', 'aiWindowBounds']);
+  deletePath(nextConfig, ['ui', 'aiWindowPresentationPin']);
   deletePath(nextConfig, ['sync', 'webdav', 'username']);
   deletePath(nextConfig, ['sync', 'webdav', 'password']);
 

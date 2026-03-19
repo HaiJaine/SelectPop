@@ -234,7 +234,8 @@ function normalizeUi(ui = {}) {
       height: Math.max(320, Number(ui?.aiWindowBounds?.height || defaults.aiWindowBounds.height))
     },
     aiWindowCloseOnBlur: ui?.aiWindowCloseOnBlur !== false,
-    aiWindowFontScale: Math.min(200, Math.max(70, Number(ui?.aiWindowFontScale || defaults.aiWindowFontScale || 100)))
+    aiWindowFontScale: Math.min(200, Math.max(70, Number(ui?.aiWindowFontScale || defaults.aiWindowFontScale || 100))),
+    aiWindowPresentationPin: ui?.aiWindowPresentationPin === true
   };
 }
 
@@ -309,6 +310,7 @@ function normalizeSelection(selection = {}, configVersion = 0) {
 
   const rawToolbarOffsetX = Number(selection?.toolbar_offset?.x);
   const rawToolbarOffsetY = Number(selection?.toolbar_offset?.y);
+  const rawToolbarAutoHideSeconds = Number(selection?.toolbar_auto_hide_seconds);
   const hasToolbarOffsetX = Number.isFinite(rawToolbarOffsetX);
   const hasToolbarOffsetY = Number.isFinite(rawToolbarOffsetY);
   const migratedLegacyToolbarOffset =
@@ -333,6 +335,10 @@ function normalizeSelection(selection = {}, configVersion = 0) {
           ? rawToolbarOffsetY
         : defaults.toolbar_offset.y
     },
+    toolbar_auto_hide_seconds:
+      Number.isFinite(rawToolbarAutoHideSeconds) && rawToolbarAutoHideSeconds > 0
+        ? Math.max(0, Math.round(rawToolbarAutoHideSeconds))
+        : 0,
     proxy: normalizeProxy(selection?.proxy, { fallbackMode: defaults.proxy?.mode || 'system' }),
     copy_fallback_enabled: configVersion < 3 ? true : selection?.copy_fallback_enabled !== false,
     diagnostics_enabled: selection?.diagnostics_enabled !== false
@@ -390,6 +396,10 @@ function normalizeConfig(input = {}) {
     ui: normalizeUi(input.ui)
   };
 }
+
+export const __test__ = {
+  normalizeConfig
+};
 
 export function initConfigStore(portablePaths) {
   store = new Store({

@@ -1,5 +1,6 @@
 import { BrowserWindow, screen } from 'electron';
 import { resolveAppFile } from './paths.js';
+import { PopupAutoHideController, normalizeAutoHideDelay } from './popup-auto-hide.js';
 
 const TOOL_BUTTON_SIZE = 36;
 const TOOLBAR_GAP = 4;
@@ -10,6 +11,7 @@ const TOOLBAR_INNER_HEIGHT = TOOLBAR_PADDING * 2 + TOOL_BUTTON_SIZE;
 const TOOLBAR_WINDOW_HEIGHT = TOOLBAR_SHELL_PADDING * 2 + TOOLBAR_INNER_HEIGHT + TOOLTIP_SAFE_HEIGHT;
 const POPUP_MOUSE_GAP_X = 10;
 const POPUP_MOUSE_GAP_Y = 8;
+
 const DEFAULT_DESTROY_AFTER_IDLE_MS = 60_000;
 
 function calcPopupWidth(toolCount) {
@@ -120,6 +122,23 @@ export class PopupManager {
     this.readyPromise = null;
     this.context = null;
     this.destroyTimer = null;
+    this.autoHideController = new PopupAutoHideController({
+      onTimeout: () => {
+        if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+          return;
+        }
+
+        this.logger?.info?.('Auto-hiding popup after configured timeout.', {
+          autoHideMs: this.getAutoHideDelayMs()
+        });
+        this.hide();
+      }
+    });
+  }
+
+  getAutoHideDelayMs() {
+    const seconds = Number(this.getConfig?.()?.selection?.toolbar_auto_hide_seconds ?? 0);
+    return normalizeAutoHideDelay(seconds > 0 ? seconds * 1000 : 0);
   }
 
   async ensureWindow() {
@@ -159,6 +178,7 @@ export class PopupManager {
     this.window.on('closed', () => {
       this.logger?.info?.('Popup BrowserWindow destroyed.');
       this.clearDestroyTimer();
+      this.autoHideController.hide();
       this.window = null;
       this.readyPromise = null;
       this.context = null;
@@ -169,7 +189,15 @@ export class PopupManager {
     return this.window;
   }
 
-  async show({ selectedText, tools, mouse, anchorPoint = null, anchorSource = '', anchorRect = null, strategy = '' }) {
+  async show({
+    selectedText,
+    tools,
+    mouse,
+    anchorPoint = null,
+    anchorSource = '',
+    anchorRect = null,
+    strategy = ''
+  }) {
     this.clearDestroyTimer();
     const window = await this.ensureWindow();
     const width = calcPopupWidth(tools.length);
@@ -218,6 +246,7 @@ export class PopupManager {
     });
     window.showInactive();
     window.moveTop();
+    this.autoHideController.show(this.getAutoHideDelayMs());
 
     return this.context;
   }
@@ -243,6 +272,7 @@ export class PopupManager {
       return;
     }
 
+    this.autoHideController.hide();
     this.window.hide();
     this.context = null;
     this.scheduleDestroyAfterIdle();
@@ -298,6 +328,10 @@ export class PopupManager {
     return this.context;
   }
 
+  noteActivity(payload = {}) {
+    this.autoHideController.activity(String(payload?.type || 'interaction'), this.getAutoHideDelayMs());
+  }
+
   wasRecentlyShown(windowMs = 250) {
     return Boolean(this.context?.shownAt && Date.now() - this.context.shownAt <= windowMs);
   }
@@ -332,6 +366,7 @@ export class PopupManager {
 
   dispose() {
     this.clearDestroyTimer();
+    this.autoHideController.dispose();
     this.context = null;
 
     if (this.window && !this.window.isDestroyed()) {

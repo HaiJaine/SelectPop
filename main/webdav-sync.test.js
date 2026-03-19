@@ -220,7 +220,8 @@ test('downloads remote shared config while preserving machine-specific fields', 
         width: 533,
         height: 477
       },
-      aiWindowFontScale: 150
+      aiWindowFontScale: 150,
+      aiWindowPresentationPin: true
     }
   });
   const snapshotHash = hashComparableWebDavConfig(baseConfig);
@@ -237,7 +238,8 @@ test('downloads remote shared config while preserving machine-specific fields', 
         width: 533,
         height: 477
       },
-      aiWindowFontScale: 150
+      aiWindowFontScale: 150,
+      aiWindowPresentationPin: true
     },
     sync: {
       webdav: {
@@ -281,6 +283,7 @@ test('downloads remote shared config while preserving machine-specific fields', 
     assert.deepEqual(savedConfig.ui.settingsBounds, localConfig.ui.settingsBounds);
     assert.deepEqual(savedConfig.ui.aiWindowBounds, localConfig.ui.aiWindowBounds);
     assert.equal(savedConfig.ui.aiWindowFontScale, 150);
+    assert.equal(savedConfig.ui.aiWindowPresentationPin, true);
   } finally {
     harness.restoreFetch();
   }

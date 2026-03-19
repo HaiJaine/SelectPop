@@ -8,20 +8,19 @@ import {
   normalizeWindowBounds
 } from './window-bounds.js';
 import { AI_SYSTEM_PROMPT } from './defaults.js';
+import {
+  AI_WINDOW_LAYER_FOREGROUND_TRANSIENT,
+  AI_WINDOW_LAYER_NORMAL,
+  AI_WINDOW_LAYER_PINNED_BACKGROUND,
+  resolveAiWindowAlwaysOnTopLevel,
+  shouldShowAiWindowOnAllWorkspaces
+} from './ai-window-policy.js';
 
 const AI_WINDOW_MOUSE_GAP_X = 12;
 const AI_WINDOW_MOUSE_GAP_Y = 8;
 const AI_WINDOW_COLLISION_SHIFT_X = 28;
 const AI_WINDOW_COLLISION_SHIFT_Y = 22;
 const AI_WINDOW_COLLISION_SHIFT_ATTEMPTS = 16;
-const AI_WINDOW_LAYER_NORMAL = 'normal';
-const AI_WINDOW_LAYER_PINNED_BACKGROUND = 'pinned-background';
-const AI_WINDOW_LAYER_FOREGROUND_TRANSIENT = 'foreground-transient';
-const AI_WINDOW_ALWAYS_ON_TOP_LEVELS = {
-  [AI_WINDOW_LAYER_NORMAL]: null,
-  [AI_WINDOW_LAYER_PINNED_BACKGROUND]: 'floating',
-  [AI_WINDOW_LAYER_FOREGROUND_TRANSIENT]: 'screen-saver'
-};
 
 function getAnchorPoint(anchorBounds) {
   const fallbackPoint = screen.getCursorScreenPoint();
@@ -143,8 +142,30 @@ export class AiWindowManager {
     return this.getWindowCount() === 0 && this.getActiveRequestCount() === 0;
   }
 
+  isPresentationPinEnabled() {
+    return this.getConfig()?.ui?.aiWindowPresentationPin === true;
+  }
+
   getBaseLayer(record) {
     return record?.pinned === true ? AI_WINDOW_LAYER_PINNED_BACKGROUND : AI_WINDOW_LAYER_NORMAL;
+  }
+
+  syncPinnedWorkspaceVisibility(record) {
+    if (!record?.window || record.window.isDestroyed()) {
+      return;
+    }
+
+    const showOnAllWorkspaces = shouldShowAiWindowOnAllWorkspaces({
+      pinned: record.pinned === true,
+      presentationPin: this.isPresentationPinEnabled()
+    });
+
+    if (showOnAllWorkspaces) {
+      record.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      return;
+    }
+
+    record.window.setVisibleOnAllWorkspaces(false);
   }
 
   applyLayer(record, layer, { moveTop = false } = {}) {
@@ -153,13 +174,18 @@ export class AiWindowManager {
     }
 
     record.layer = layer;
-    const alwaysOnTopLevel = AI_WINDOW_ALWAYS_ON_TOP_LEVELS[layer];
+    const alwaysOnTopLevel = resolveAiWindowAlwaysOnTopLevel(layer, {
+      pinned: record.pinned === true,
+      presentationPin: this.isPresentationPinEnabled()
+    });
 
     if (alwaysOnTopLevel) {
       record.window.setAlwaysOnTop(true, alwaysOnTopLevel);
     } else {
       record.window.setAlwaysOnTop(false);
     }
+
+    this.syncPinnedWorkspaceVisibility(record);
 
     if (moveTop) {
       record.window.moveTop();
@@ -329,7 +355,7 @@ export class AiWindowManager {
         return;
       }
 
-      this.promoteRecord(record);
+      this.promoteRecord(record, { moveTop: true });
     });
     window.on('blur', () => {
       if (record.window.isDestroyed()) {
@@ -341,7 +367,7 @@ export class AiWindowManager {
       }
 
       if (record.pinned) {
-        this.restoreBaseLayer(record);
+        this.restoreBaseLayer(record, { moveTop: this.isPresentationPinEnabled() });
         return;
       }
 
@@ -414,7 +440,7 @@ export class AiWindowManager {
     };
 
     record.blurCloseUntil = Date.now() + 450;
-    this.promoteRecord(record);
+    this.promoteRecord(record, { moveTop: true });
     record.window.show();
     record.window.focus();
     this.notifyStateChanged('translation-opened');
@@ -704,9 +730,9 @@ export class AiWindowManager {
 
     record.pinned = !record.pinned;
     if (record.window.isFocused() || record.layer === AI_WINDOW_LAYER_FOREGROUND_TRANSIENT) {
-      this.promoteRecord(record);
+      this.promoteRecord(record, { moveTop: true });
     } else {
-      this.restoreBaseLayer(record);
+      this.restoreBaseLayer(record, { moveTop: true });
     }
     record.blurCloseUntil = Date.now() + 250;
     record.window.webContents.send('ai:pinned', { pinned: record.pinned });
@@ -736,6 +762,9 @@ export class AiWindowManager {
 
       const nextBounds = clampWindowBoundsToDisplay(extractWindowBounds(record.window));
       record.window.setBounds(nextBounds);
+      this.applyLayer(record, record.layer, {
+        moveTop: record.pinned === true && this.isPresentationPinEnabled()
+      });
       this.saveBounds?.(extractWindowBounds(record.window));
     }
   }
@@ -749,6 +778,9 @@ export class AiWindowManager {
       }
 
       record.window.webContents.send('ai:ui-config', payload);
+      this.applyLayer(record, record.layer, {
+        moveTop: record.pinned === true && config?.ui?.aiWindowPresentationPin === true
+      });
     }
   }
 

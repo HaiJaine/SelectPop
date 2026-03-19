@@ -122,6 +122,7 @@ const SELECTION_DEFERRED_FIELDS = new Set([
   'blacklist_text',
   'toolbar_offset_x',
   'toolbar_offset_y',
+  'toolbar_auto_hide_seconds',
   'proxy_host',
   'proxy_port'
 ]);
@@ -651,6 +652,7 @@ function createSelectionDraft(selection) {
     whitelist_text: formatLineList(selection.whitelist_exes),
     toolbar_offset_x: Number(selection?.toolbar_offset?.x ?? 0),
     toolbar_offset_y: Number(selection?.toolbar_offset?.y ?? 0),
+    toolbar_auto_hide_seconds: Number(selection?.toolbar_auto_hide_seconds ?? 0),
     proxy_mode: selection?.proxy?.mode || 'system',
     proxy_type: selection?.proxy?.type || 'http',
     proxy_host: selection?.proxy?.host || '',
@@ -1043,6 +1045,7 @@ function buildProviderPayload(draft) {
 function buildSelectionPayload(draft) {
   const toolbarOffsetX = Number(draft.toolbar_offset_x);
   const toolbarOffsetY = Number(draft.toolbar_offset_y);
+  const toolbarAutoHideSeconds = Number(draft.toolbar_auto_hide_seconds);
   const payload = {
     mode: draft.mode || 'auto',
     auxiliary_hotkey: draft.auxiliary_hotkey || [],
@@ -1055,6 +1058,10 @@ function buildSelectionPayload(draft) {
       x: Number.isFinite(toolbarOffsetX) ? toolbarOffsetX : 0,
       y: Number.isFinite(toolbarOffsetY) ? toolbarOffsetY : 0
     },
+    toolbar_auto_hide_seconds:
+      Number.isFinite(toolbarAutoHideSeconds) && toolbarAutoHideSeconds > 0
+        ? Math.max(0, Math.round(toolbarAutoHideSeconds))
+        : 0,
     proxy: {
       mode: draft.proxy_mode || 'system'
     },
@@ -1613,6 +1620,7 @@ function renderSelectionSettings() {
     hard_disabled_categories: [],
     toolbar_offset_x: 0,
     toolbar_offset_y: 0,
+    toolbar_auto_hide_seconds: 0,
     proxy_mode: 'system',
     proxy_type: 'http',
     proxy_host: '',
@@ -1705,39 +1713,50 @@ function renderSelectionSettings() {
             <div class="field-hint">正值向下，负值向上；以鼠标右下方为基准微调。</div>
           </div>
         </div>
+        <div class="field">
+          <label class="field-label" for="toolbar-auto-hide-seconds">自动消失时间(秒)</label>
+          <input
+            id="toolbar-auto-hide-seconds"
+            type="number"
+            min="0"
+            step="1"
+            data-selection-field="toolbar_auto_hide_seconds"
+            value="${escapeHtml(draft.toolbar_auto_hide_seconds ?? 0)}"
+          />
+          <div class="field-hint">默认 0，表示工具条显示后不自动消失。</div>
+        </div>
       </section>
 
       <section class="selection-card">
         <div class="selection-card-title">AI 翻译窗口</div>
-        <div class="selection-check-grid selection-check-grid-compact">
-          <label class="checkbox-row mirror-row compact-row">
-            <span>未置顶时失去焦点自动关闭</span>
+        <div class="setting-toggle-list">
+          <label class="setting-toggle-item">
+            <span class="setting-toggle-title">未置顶时失去焦点自动关闭</span>
             <input
               type="checkbox"
               data-ui-field="aiWindowCloseOnBlur"
               ${state.config?.ui?.aiWindowCloseOnBlur !== false ? 'checked' : ''}
             />
+            <span class="setting-toggle-hint">默认开启；置顶窗口会忽略这个规则。</span>
           </label>
-          <label class="checkbox-row mirror-row compact-row">
-            <span>同步缩放比例</span>
+          <label class="setting-toggle-item">
+            <span class="setting-toggle-title">同步缩放比例</span>
             <input
               type="checkbox"
               data-sync-field="sync_ai_window_font_size"
               ${state.config?.sync?.webdav?.sync_ai_window_font_size === true ? 'checked' : ''}
             />
+            <span class="setting-toggle-hint">默认不同步，避免不同设备的 AI 面板字号互相覆盖。</span>
           </label>
-        </div>
-        <div class="field-inline checkbox-hint-inline">
-          <div class="field checkbox-field">
-            <div class="field-hint">
-              默认开启；置顶窗口会忽略这个规则。
-            </div>
-          </div>
-          <div class="field checkbox-field">
-            <div class="field-hint">
-              默认不同步，避免不同设备的 AI 面板字号互相覆盖。
-            </div>
-          </div>
+          <label class="setting-toggle-item">
+            <span class="setting-toggle-title">共享/演示时增强置顶</span>
+            <input
+              type="checkbox"
+              data-ui-field="aiWindowPresentationPin"
+              ${state.config?.ui?.aiWindowPresentationPin === true ? 'checked' : ''}
+            />
+            <span class="setting-toggle-hint">默认关闭；只在腾讯会议共享屏幕、录屏演示等场景需要更强置顶时开启。</span>
+          </label>
         </div>
         <div class="field">
           <label class="field-label" for="ai-window-font-scale">字体缩放(%)</label>
@@ -1829,6 +1848,9 @@ function renderSelectionSettings() {
               `
             )
             .join('')}
+        </div>
+        <div class="field-hint">
+          这是安全兜底，不是功能前提。默认建议保持开启，只有你明确希望在某类软件里也触发划词时，再关闭对应项。
         </div>
       </section>
 

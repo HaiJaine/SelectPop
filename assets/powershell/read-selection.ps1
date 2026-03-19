@@ -6,55 +6,215 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-function Write-SelectionResult {
+function New-SelectionResult {
+  param(
+    [string]$Text = '',
+    [string]$Strategy = 'none',
+    [string]$FocusKind = 'unknown',
+    [bool]$TimedOut = $false,
+    [string]$Error = ''
+  )
+
+  $resolvedText = if ($null -ne $Text) { [string]$Text } else { '' }
+  $resolvedStrategy = if ($null -ne $Strategy) { [string]$Strategy } else { 'none' }
+  $resolvedError = if ($null -ne $Error) { [string]$Error } else { '' }
+
+  [pscustomobject]@{
+    text = $resolvedText
+    strategy = $resolvedStrategy
+    focusKind = if ($FocusKind -in @('editor', 'terminal', 'unknown')) { $FocusKind } else { 'unknown' }
+    timedOut = $TimedOut -eq $true
+    error = $resolvedError
+  }
+}
+
+function Write-SelectionResultJson {
+  param(
+    [pscustomobject]$Result
+  )
+
+  $Result | ConvertTo-Json -Compress
+}
+
+function Normalize-SelectionText {
   param(
     [string]$Text
   )
 
-  if (-not [string]::IsNullOrWhiteSpace($Text)) {
-    [Console]::Write($Text.Trim())
-    exit 0
+  if ([string]::IsNullOrWhiteSpace($Text)) {
+    return ''
   }
+
+  return $Text.Replace("`0", '').Trim()
 }
 
-function Get-SelectionFromUiAutomation {
+function Add-UiAutomationAssemblies {
+  Add-Type -AssemblyName UIAutomationClient | Out-Null
+  Add-Type -AssemblyName UIAutomationTypes | Out-Null
+}
+
+function Get-ControlTypeName {
+  param(
+    $Element
+  )
+
+  if ($null -eq $Element) {
+    return ''
+  }
+
   try {
-    Add-Type -AssemblyName UIAutomationClient | Out-Null
-    Add-Type -AssemblyName UIAutomationTypes | Out-Null
+    $controlType = [System.Windows.Automation.ControlType]::LookupById($Element.Current.ControlType)
 
-    $element = [System.Windows.Automation.AutomationElement]::FocusedElement
-
-    if ($null -eq $element) {
+    if ($null -eq $controlType) {
       return ''
     }
 
-    $pattern = $element.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
-
-    if ($pattern -isnot [System.Windows.Automation.TextPattern]) {
-      return ''
-    }
-
-    $ranges = $pattern.GetSelection()
-
-    if ($null -eq $ranges -or $ranges.Length -eq 0) {
-      return ''
-    }
-
-    $parts = foreach ($range in $ranges) {
-      try {
-        $text = $range.GetText(-1)
-
-        if (-not [string]::IsNullOrWhiteSpace($text)) {
-          $text.Trim()
-        }
-      } catch {
-      }
-    }
-
-    return (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine).Trim()
+    return [string]$controlType.ProgrammaticName
   } catch {
     return ''
   }
+}
+
+function Get-UiAutomationCandidateElements {
+  param(
+    $StartElement
+  )
+
+  if ($null -eq $StartElement) {
+    return @()
+  }
+
+  $walker = $null
+
+  try {
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  } catch {
+    return @($StartElement)
+  }
+
+  $current = $StartElement
+  $elements = @()
+
+  for ($index = 0; $index -lt 8 -and $null -ne $current; $index += 1) {
+    $elements += $current
+
+    try {
+      $current = $walker.GetParent($current)
+    } catch {
+      break
+    }
+  }
+
+  return $elements
+}
+
+function Resolve-FocusKind {
+  param(
+    $FocusedElement
+  )
+
+  if ($null -eq $FocusedElement) {
+    return 'unknown'
+  }
+
+  $signals = New-Object System.Collections.Generic.List[string]
+
+  foreach ($element in (Get-UiAutomationCandidateElements -StartElement $FocusedElement)) {
+    try {
+      $parts = @(
+        [string]$element.Current.Name,
+        [string]$element.Current.AutomationId,
+        [string]$element.Current.ClassName,
+        (Get-ControlTypeName -Element $element)
+      ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+      if ($parts.Count -gt 0) {
+        $signals.Add(($parts -join ' ').ToLowerInvariant())
+      }
+    } catch {
+    }
+  }
+
+  foreach ($signal in $signals) {
+    if ($signal -match 'terminal|xterm|conpty|pty|shellintegration|terminalinstance') {
+      return 'terminal'
+    }
+  }
+
+  foreach ($signal in $signals) {
+    if ($signal -match 'controltype\.document|controltype\.edit|editor|textarea|textinput') {
+      return 'editor'
+    }
+  }
+
+  return 'unknown'
+}
+
+function Get-FocusedElementSnapshot {
+  $focusedElement = $null
+
+  try {
+    Add-UiAutomationAssemblies
+    $focusedElement = [System.Windows.Automation.AutomationElement]::FocusedElement
+  } catch {
+    return [pscustomobject]@{
+      focusedElement = $null
+      focusKind = 'unknown'
+      error = $_.Exception.Message
+    }
+  }
+
+  return [pscustomobject]@{
+    focusedElement = $focusedElement
+    focusKind = Resolve-FocusKind -FocusedElement $focusedElement
+    error = ''
+  }
+}
+
+function Try-GetSelectionFromUiAutomation {
+  param(
+    $FocusedElement
+  )
+
+  if ($null -eq $FocusedElement) {
+    return New-SelectionResult -Strategy 'uia' -Error 'Focused element was unavailable.'
+  }
+
+  foreach ($element in (Get-UiAutomationCandidateElements -StartElement $FocusedElement)) {
+    try {
+      $pattern = $element.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+
+      if ($pattern -isnot [System.Windows.Automation.TextPattern]) {
+        continue
+      }
+
+      $ranges = $pattern.GetSelection()
+
+      if ($null -eq $ranges -or $ranges.Length -eq 0) {
+        continue
+      }
+
+      $parts = foreach ($range in $ranges) {
+        try {
+          $text = Normalize-SelectionText -Text $range.GetText(-1)
+
+          if (-not [string]::IsNullOrWhiteSpace($text)) {
+            $text
+          }
+        } catch {
+        }
+      }
+
+      $resolvedText = Normalize-SelectionText -Text (($parts | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine)
+
+      if (-not [string]::IsNullOrWhiteSpace($resolvedText)) {
+        return New-SelectionResult -Text $resolvedText -Strategy 'uia' -FocusKind (Resolve-FocusKind -FocusedElement $FocusedElement)
+      }
+    } catch {
+    }
+  }
+
+  return New-SelectionResult -Strategy 'uia' -FocusKind (Resolve-FocusKind -FocusedElement $FocusedElement) -Error 'UIAutomation selection was empty.'
 }
 
 if (-not ('SelectPopWin32SelectionReader' -as [type])) {
@@ -165,18 +325,48 @@ public static class SelectPopWin32SelectionReader {
 "@ | Out-Null
 }
 
-function Get-SelectionFromWin32 {
+function Try-GetSelectionFromWin32 {
   try {
-    return [SelectPopWin32SelectionReader]::TryGetSelectionFromFocusedEdit()
+    $text = Normalize-SelectionText -Text ([SelectPopWin32SelectionReader]::TryGetSelectionFromFocusedEdit())
+
+    if (-not [string]::IsNullOrWhiteSpace($text)) {
+      return New-SelectionResult -Text $text -Strategy 'win32'
+    }
+
+    return New-SelectionResult -Strategy 'win32' -Error 'Win32 selection was empty.'
   } catch {
-    return ''
+    return New-SelectionResult -Strategy 'win32' -Error $_.Exception.Message
   }
 }
 
+$focusedElementSnapshot = Get-FocusedElementSnapshot
+$result = New-SelectionResult -FocusKind $focusedElementSnapshot.focusKind -Error $focusedElementSnapshot.error
+
 if ($Mode -eq 'auto' -or $Mode -eq 'uia') {
-  Write-SelectionResult (Get-SelectionFromUiAutomation)
+  $uiaResult = Try-GetSelectionFromUiAutomation -FocusedElement $focusedElementSnapshot.focusedElement
+
+  if ($uiaResult.text) {
+    Write-SelectionResultJson $uiaResult
+    exit 0
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($uiaResult.error)) {
+    $result.error = $uiaResult.error
+  }
 }
 
 if ($Mode -eq 'auto' -or $Mode -eq 'win32') {
-  Write-SelectionResult (Get-SelectionFromWin32)
+  $win32Result = Try-GetSelectionFromWin32
+
+  if ($win32Result.text) {
+    $win32Result.focusKind = if ($result.focusKind -in @('editor', 'terminal')) { $result.focusKind } else { 'unknown' }
+    Write-SelectionResultJson $win32Result
+    exit 0
+  }
+
+  if ([string]::IsNullOrWhiteSpace($result.error) -and -not [string]::IsNullOrWhiteSpace($win32Result.error)) {
+    $result.error = $win32Result.error
+  }
 }
+
+Write-SelectionResultJson $result

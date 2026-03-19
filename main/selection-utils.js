@@ -28,14 +28,20 @@ export function distanceBetweenPoints(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-export async function readSelectedTextFromClipboard(sendCopyShortcut) {
+export async function readSelectedTextFromClipboard(sendCopyShortcut, options = {}) {
   const snapshot = captureClipboardState();
   const probe = `__selectpop_probe__${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 
   try {
     clipboard.writeText(probe);
     await sleep(30);
+    if (typeof options?.beforeSendCopyShortcut === 'function') {
+      await options.beforeSendCopyShortcut();
+    }
     await sendCopyShortcut();
+    if (typeof options?.afterSendCopyShortcut === 'function') {
+      await options.afterSendCopyShortcut();
+    }
 
     const startedAt = Date.now();
 

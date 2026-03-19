@@ -7,6 +7,10 @@ const iconBasePath = '../../assets/icons';
 let executing = false;
 let tooltipTargetId = '';
 
+function notifyActivity(type = 'interaction') {
+  window.popupApi.notifyActivity({ type });
+}
+
 function getAnchorPointFromButton(button, event = null) {
   const screenX = Number(event?.screenX);
   const screenY = Number(event?.screenY);
@@ -90,6 +94,7 @@ toolbarElement.addEventListener('click', async (event) => {
     return;
   }
 
+  notifyActivity('interaction');
   executing = true;
 
   try {
@@ -111,6 +116,7 @@ toolbarElement.addEventListener('mouseover', (event) => {
     return;
   }
 
+  notifyActivity('interaction');
   showTooltip(button);
 });
 
@@ -139,6 +145,7 @@ toolbarElement.addEventListener('focusin', (event) => {
   const button = event.target.closest('[data-tool-id]');
 
   if (button) {
+    notifyActivity('interaction');
     showTooltip(button);
   }
 });
@@ -155,6 +162,7 @@ toolbarElement.addEventListener('keydown', async (event) => {
   }
 
   event.preventDefault();
+  notifyActivity('interaction');
   executing = true;
 
   try {
@@ -171,6 +179,14 @@ toolbarElement.addEventListener('keydown', async (event) => {
 
 toolbarElement.addEventListener('focusout', () => {
   hideTooltip();
+});
+
+shellElement.addEventListener('mouseenter', () => {
+  notifyActivity('hover-enter');
+});
+
+shellElement.addEventListener('mouseleave', () => {
+  notifyActivity('hover-leave');
 });
 
 window.popupApi.getTools().then(renderTools);

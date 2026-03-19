@@ -1,10 +1,19 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { resolvePowerShellAssetPath } from './paths.js';
-import { readSelectedTextFromClipboard } from './selection-utils.js';
 
 const execFileAsync = promisify(execFile);
-const READ_SELECTION_TIMEOUT_MS = 320;
+export const READ_SELECTION_TIMEOUT_MS = 320;
+export const VSCODE_READ_SELECTION_TIMEOUT_MS = 900;
+
+async function resolvePowerShellAssetPathDefault(fileName) {
+  const { resolvePowerShellAssetPath } = await import('./paths.js');
+  return resolvePowerShellAssetPath(fileName);
+}
+
+async function readSelectedTextFromClipboardDefault(sendCopyShortcut, options) {
+  const { readSelectedTextFromClipboard } = await import('./selection-utils.js');
+  return readSelectedTextFromClipboard(sendCopyShortcut, options);
+}
 
 function sanitizeSelectedText(value) {
   return String(value || '')
@@ -13,49 +22,187 @@ function sanitizeSelectedText(value) {
     .trim();
 }
 
+function createSelectionReadResult(overrides = {}) {
+  return {
+    ok: false,
+    text: '',
+    strategy: 'none',
+    focusKind: 'unknown',
+    timedOut: false,
+    error: '',
+    ...overrides
+  };
+}
+
+function normalizeFocusKind(value) {
+  return ['editor', 'terminal', 'unknown'].includes(value) ? value : 'unknown';
+}
+
+function parseSelectionScriptResult(stdout) {
+  const rawOutput = String(stdout || '').trim();
+
+  if (!rawOutput) {
+    return createSelectionReadResult({
+      strategy: 'none',
+      error: ''
+    });
+  }
+
+  try {
+    const parsed = JSON.parse(rawOutput);
+    const text = sanitizeSelectedText(parsed?.text);
+    const strategy = String(parsed?.strategy || (text ? 'script' : 'none'));
+
+    return createSelectionReadResult({
+      ok: Boolean(text),
+      text,
+      strategy,
+      focusKind: normalizeFocusKind(String(parsed?.focusKind || 'unknown')),
+      timedOut: parsed?.timedOut === true,
+      error: String(parsed?.error || '')
+    });
+  } catch {
+    const text = sanitizeSelectedText(rawOutput);
+    return createSelectionReadResult({
+      ok: Boolean(text),
+      text,
+      strategy: text ? 'legacy-script' : 'none',
+      focusKind: 'unknown',
+      timedOut: false,
+      error: ''
+    });
+  }
+}
+
 export class SelectionService {
-  constructor({ sendCopyShortcut, logger = console }) {
+  constructor({
+    sendCopyShortcut,
+    logger = console,
+    execFileImpl = execFileAsync,
+    readSelectedTextFromClipboardImpl = readSelectedTextFromClipboardDefault,
+    resolvePowerShellAssetPathImpl = resolvePowerShellAssetPathDefault
+  } = {}) {
     this.sendCopyShortcut = sendCopyShortcut;
     this.logger = logger;
+    this.execFileImpl = execFileImpl;
+    this.readSelectedTextFromClipboardImpl = readSelectedTextFromClipboardImpl;
+    this.resolvePowerShellAssetPathImpl = resolvePowerShellAssetPathImpl;
     this.readQueue = Promise.resolve('');
   }
 
-  async getSelectedTextSafe() {
-    const readTask = this.readQueue
-      .catch(() => '')
-      .then(async () => {
-        const scriptText = await this.#readSelectedTextViaScript();
-
-        if (scriptText) {
-          return scriptText;
-        }
-
-        return readSelectedTextFromClipboard(this.sendCopyShortcut);
-      });
-
-    this.readQueue = readTask.catch(() => '');
-    return readTask;
+  async getSelectedTextSafe(options = {}) {
+    const result = await this.readSelection(options);
+    return result.text || '';
   }
 
-  async #readSelectedTextViaScript() {
-    const scriptPath = resolvePowerShellAssetPath('read-selection.ps1');
+  async readSelection(options = {}) {
+    return this.#enqueueRead(async () => {
+      const scriptResult = options.skipScript === true
+        ? createSelectionReadResult()
+        : await this.readScriptSelection(options);
+
+      if (scriptResult.ok || options.allowClipboardFallback !== true) {
+        return scriptResult;
+      }
+
+      const clipboardResult = await this.#readClipboardSelectionNow({
+        sendCopyShortcut: options.sendCopyShortcut,
+        strategy: options.clipboardStrategy || 'clipboard',
+        focusKind: scriptResult.focusKind,
+        emptyError: options.clipboardEmptyError || 'Clipboard fallback returned empty text.',
+        clipboardReadOptions: options.clipboardReadOptions || {}
+      });
+
+      if (clipboardResult.ok) {
+        return clipboardResult;
+      }
+
+      return createSelectionReadResult({
+        ...scriptResult,
+        strategy: clipboardResult.strategy || scriptResult.strategy,
+        error: scriptResult.error || clipboardResult.error
+      });
+    });
+  }
+
+  async readScriptSelection(options = {}) {
+    const mode = String(options.scriptMode || 'auto');
+    const timeoutMs = Number.isFinite(Number(options.scriptTimeoutMs))
+      ? Math.max(100, Number(options.scriptTimeoutMs))
+      : READ_SELECTION_TIMEOUT_MS;
+    const scriptPath = await this.resolvePowerShellAssetPathImpl('read-selection.ps1');
 
     try {
-      const { stdout } = await execFileAsync(
+      const { stdout } = await this.execFileImpl(
         'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Mode', 'auto'],
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Mode', mode],
         {
           windowsHide: true,
           encoding: 'utf8',
-          timeout: READ_SELECTION_TIMEOUT_MS,
+          timeout: timeoutMs,
           maxBuffer: 256 * 1024
         }
       );
 
-      return sanitizeSelectedText(stdout);
+      return parseSelectionScriptResult(stdout);
     } catch (error) {
-      this.logger.warn?.('[SelectPop] UIAutomation selection read failed:', error?.message || error);
-      return '';
+      const timedOut = error?.killed === true || error?.signal === 'SIGTERM';
+      return createSelectionReadResult({
+        strategy: timedOut ? 'script-timeout' : 'script-error',
+        focusKind: 'unknown',
+        timedOut,
+        error: timedOut
+          ? `Selection script timed out after ${timeoutMs} ms.`
+          : String(error?.message || error || 'Selection script failed.')
+      });
     }
+  }
+
+  async readClipboardSelection({
+    sendCopyShortcut,
+    strategy = 'clipboard',
+    focusKind = 'unknown',
+    emptyError = 'Clipboard fallback returned empty text.',
+    clipboardReadOptions = {}
+  } = {}) {
+    return this.#enqueueRead(async () =>
+      this.#readClipboardSelectionNow({
+        sendCopyShortcut,
+        strategy,
+        focusKind,
+        emptyError,
+        clipboardReadOptions
+      })
+    );
+  }
+
+  async #enqueueRead(taskFactory) {
+    const readTask = this.readQueue
+      .catch(() => createSelectionReadResult())
+      .then(() => taskFactory());
+
+    this.readQueue = readTask.catch(() => createSelectionReadResult());
+    return readTask;
+  }
+
+  async #readClipboardSelectionNow({
+    sendCopyShortcut,
+    strategy = 'clipboard',
+    focusKind = 'unknown',
+    emptyError = 'Clipboard fallback returned empty text.',
+    clipboardReadOptions = {}
+  } = {}) {
+    const text = await this.readSelectedTextFromClipboardImpl(
+      sendCopyShortcut || this.sendCopyShortcut,
+      clipboardReadOptions
+    );
+    return createSelectionReadResult({
+      ok: Boolean(text),
+      text: sanitizeSelectedText(text),
+      strategy,
+      focusKind: normalizeFocusKind(String(focusKind || 'unknown')),
+      timedOut: false,
+      error: text ? '' : emptyError
+    });
   }
 }

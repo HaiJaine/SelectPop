@@ -118,3 +118,7 @@ export function sendKeys(keys) {
 export function sendCopyShortcut() {
   return sendKeys(['ctrl', 'c']);
 }
+
+export function sendVsCodeCopyShortcut() {
+  return sendKeys(['ctrl', 'shift', 'c']);
+}

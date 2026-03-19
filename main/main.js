@@ -727,6 +727,79 @@ function resolvePopupAnchorPoint(fallbackPoint = null) {
   };
 }
 
+async function showPopupForSelection({
+  selectedText,
+  tools = getEnabledTools(),
+  diagnostics = {},
+  strategy = '',
+  mouse = null,
+  anchorRect = null
+} = {}) {
+  if (!globalEnabled) {
+    return false;
+  }
+
+  if (!tools.length || !selectedText) {
+    appLogger.warn('selection', 'Selection result ignored because no enabled tools or text were available.', {
+      enabledToolCount: tools.length,
+      selectionLength: selectedText?.length || 0
+    });
+    return false;
+  }
+
+  for (const tool of tools) {
+    queuePopupToolIconFetch(tool);
+  }
+
+  if (popupManager.isVisible()) {
+    popupManager.hide();
+  }
+
+  const selectionReason = diagnostics?.lastReason || '';
+  appLogger.info('selection', 'Selection found.', {
+    strategy: strategy || diagnostics?.lastStrategy || '',
+    reason: selectionReason,
+    processName: diagnostics?.processName || '',
+    selectionLength: selectedText.length
+  });
+
+  const helperMouseDip =
+    mouse && Number.isFinite(mouse.x) && Number.isFinite(mouse.y)
+      ? normalizeHookPoint(mouse)
+      : null;
+  const popupAnchor =
+    selectionReason.startsWith('mouse-')
+      ? resolvePopupAnchorPoint(helperMouseDip)
+      : {
+          point: captureLiveCursorDip(helperMouseDip) || helperMouseDip || { x: 0, y: 0 },
+          source: 'live-cursor-dip'
+        };
+
+  await popupManager.show({
+    selectedText,
+    tools: await decorateToolsForUi(tools),
+    mouse,
+    anchorPoint: popupAnchor.point,
+    anchorSource: popupAnchor.source,
+    anchorRect,
+    strategy
+  });
+  const popupContext = popupManager.getContext?.() || {};
+  appLogger.info('popup', 'Popup shown for selected text.', {
+    toolCount: tools.length,
+    strategy: strategy || diagnostics?.lastStrategy || '',
+    anchorType: popupContext.anchorType || 'unknown',
+    anchorSource: popupContext.anchorSource || 'unknown',
+    usedAnchorRect: popupContext.usedAnchorRect === true,
+    helperMouse: popupContext.mouse || null,
+    liveCursorDip: popupContext.anchorPoint || null,
+    helperLiveDelta: popupContext.helperLiveDelta || null,
+    displayScaleFactor: popupContext.displayScaleFactor || null,
+    bounds: popupManager.getBounds()
+  });
+  return true;
+}
+
 function applyLaunchOnBoot(config) {
   return syncLaunchOnBootPreference(config);
 }
@@ -1119,6 +1192,9 @@ function registerIpc() {
     return decorateToolsForUi(tools);
   });
   ipcMain.handle('popup:execute-tool', async (_event, payload) => executeTool(payload));
+  ipcMain.on('popup:activity', (_event, payload) => {
+    popupManager.noteActivity(payload);
+  });
   ipcMain.handle('settings:get-config', () => getConfig());
   ipcMain.handle('settings:save-config', async (_event, nextConfig) => {
     return commitConfig(nextConfig, {
@@ -1308,69 +1384,14 @@ function startHookWorker() {
 
 function registerNativeEvents() {
   nativeClient.on('selection-found', async (payload = {}) => {
-    if (!globalEnabled) {
-      return;
-    }
-
-    const enabledTools = getEnabledTools();
-
-    if (!enabledTools.length || !payload.text) {
-      appLogger.warn('selection', 'Selection result ignored because no enabled tools or text were available.', {
-        enabledToolCount: enabledTools.length,
-        selectionLength: payload.text?.length || 0
-      });
-      return;
-    }
-
     try {
-      for (const tool of enabledTools) {
-        queuePopupToolIconFetch(tool);
-      }
-
-      if (popupManager.isVisible()) {
-        popupManager.hide();
-      }
-      const selectionReason = payload.diagnostics?.lastReason || '';
-
-      appLogger.info('selection', 'Selection found.', {
-        strategy: payload.strategy || payload.diagnostics?.lastStrategy || '',
-        reason: selectionReason,
-        processName: payload.diagnostics?.processName || '',
-        selectionLength: payload.text.length
-      });
-      const helperMouseDip =
-        payload.mouse && Number.isFinite(payload.mouse.x) && Number.isFinite(payload.mouse.y)
-          ? normalizeHookPoint(payload.mouse)
-          : null;
-      const popupAnchor =
-        selectionReason.startsWith('mouse-')
-          ? resolvePopupAnchorPoint(helperMouseDip)
-          : {
-              point: captureLiveCursorDip(helperMouseDip) || helperMouseDip || { x: 0, y: 0 },
-              source: 'live-cursor-dip'
-            };
-
-      await popupManager.show({
+      await showPopupForSelection({
         selectedText: payload.text,
-        tools: await decorateToolsForUi(enabledTools),
-        mouse: payload.mouse || { x: 0, y: 0 },
-        anchorPoint: popupAnchor.point,
-        anchorSource: popupAnchor.source,
-        anchorRect: payload.anchorRect || null,
-        strategy: payload.strategy || ''
-      });
-      const popupContext = popupManager.getContext?.() || {};
-      appLogger.info('popup', 'Popup shown for selected text.', {
-        toolCount: enabledTools.length,
+        tools: getEnabledTools(),
+        diagnostics: payload.diagnostics || {},
         strategy: payload.strategy || payload.diagnostics?.lastStrategy || '',
-        anchorType: popupContext.anchorType || 'unknown',
-        anchorSource: popupContext.anchorSource || 'unknown',
-        usedAnchorRect: popupContext.usedAnchorRect === true,
-        helperMouse: popupContext.mouse || null,
-        liveCursorDip: popupContext.anchorPoint || null,
-        helperLiveDelta: popupContext.helperLiveDelta || null,
-        displayScaleFactor: popupContext.displayScaleFactor || null,
-        bounds: popupManager.getBounds()
+        mouse: payload.mouse || { x: 0, y: 0 },
+        anchorRect: payload.anchorRect || null,
       });
     } catch (error) {
       appLogger.error('popup', 'Failed to show popup from native helper.', error);
