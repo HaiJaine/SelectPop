@@ -28,7 +28,8 @@ export async function getForegroundWindow() {
       title: parsed.title || '',
       owner: {
         processId: parsed.processId,
-        name: parsed.name || ''
+        name: parsed.name || '',
+        path: parsed.path || ''
       }
     };
   } catch {

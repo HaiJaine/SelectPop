@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "npm run build:native && electron .",
     "build:native": "node scripts/build-native.mjs",
-    "test": "node --test main/webdav-sync.test.js main/launch-on-boot.test.js main/config.test.js main/ai-window-policy.test.js main/popup-auto-hide.test.js main/selection-service.test.js",
+    "test": "node --test main/webdav-sync.test.js main/launch-on-boot.test.js main/config.test.js main/copy-app-rules.test.js main/installed-apps.test.js main/selection-recovery.test.js main/ai-window-policy.test.js main/popup-auto-hide.test.js main/selection-service.test.js main/ai/web-translators.test.js",
     "postinstall": "electron-builder install-app-deps",
     "pack:portable": "npm run build:native && node scripts/run-electron-builder.mjs --config electron-builder.yml --win portable --x64",
     "dist:portable": "npm run build:native && node scripts/run-electron-builder.mjs --config electron-builder.yml --win portable --x64 && node scripts/dist-portable.mjs",

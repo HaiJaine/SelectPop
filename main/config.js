@@ -3,11 +3,14 @@ import {
   AI_SYSTEM_PROMPT,
   BUILTIN_COPY_TOOL_ID,
   CONFIG_VERSION,
+  DEFAULT_TRANSLATION_SERVICES,
   HARD_DISABLED_CATEGORIES,
   SUPPORTED_BROWSERS,
   SUPPORTED_PROXY_MODES,
   SUPPORTED_PROXY_TYPES,
   SUPPORTED_SELECTION_MODES,
+  SUPPORTED_TRANSLATION_SERVICE_API_VARIANTS,
+  SUPPORTED_TRANSLATION_SERVICE_DRIVERS,
   SUPPORTED_WEBDAV_CONFLICT_POLICIES,
   SUPPORTED_WEBDAV_SYNC_MODES,
   SUPPORTED_TOOL_TYPES,
@@ -17,6 +20,13 @@ import {
 import { TOOL_TYPE_DEFAULT_ICONS, normalizeIconName } from '../shared/icons.js';
 import { deriveUrlToolFaviconMeta } from '../shared/url-tool.js';
 import { coerceArray, createId, deepClone } from './utils.js';
+import {
+  canonicalizeExePath,
+  COPY_APP_RULE_MODES,
+  COPY_APP_RULE_SOURCES,
+  inferProcessNameFromExePath,
+  normalizeExePath
+} from './copy-app-rules.js';
 
 let store;
 
@@ -81,10 +91,33 @@ function normalizeUrlTool(tool = {}) {
 }
 
 function normalizeAiTool(tool = {}) {
+  const normalizeTranslationTarget = (target) => {
+    const kind = target?.kind === 'service' ? 'service' : 'provider';
+    const id = String(target?.id || '').trim();
+
+    if (!id) {
+      return null;
+    }
+
+    return { kind, id };
+  };
+
   const providerIds = coerceArray(tool.provider_ids)
     .concat(typeof tool.provider_id === 'string' ? [tool.provider_id] : [])
     .map((value) => String(value || '').trim())
     .filter(Boolean);
+  const translationTargets = Array.from(
+    new Map(
+      (
+        Array.isArray(tool.translation_targets) && tool.translation_targets.length
+          ? tool.translation_targets.map(normalizeTranslationTarget).filter(Boolean)
+          : providerIds.map((id) => ({ kind: 'provider', id }))
+      ).map((target) => [`${target.kind}:${target.id}`, target])
+    ).values()
+  ).filter((target) => !(target.kind === 'service' && target.id === 'deepl-free'));
+  const aiProviderIds = translationTargets
+    .filter((target) => target.kind === 'provider')
+    .map((target) => target.id);
 
   return {
     id: String(tool.id || createId('tool')),
@@ -92,8 +125,9 @@ function normalizeAiTool(tool = {}) {
     name: String(tool.name || 'AI 翻译'),
     icon: normalizeIconName(tool.icon) || TOOL_TYPE_DEFAULT_ICONS.ai,
     enabled: tool.enabled !== false,
-    provider_id: providerIds[0] || '',
-    provider_ids: Array.from(new Set(providerIds)),
+    provider_id: aiProviderIds[0] || '',
+    provider_ids: Array.from(new Set(aiProviderIds)),
+    translation_targets: translationTargets,
     copy_before_action: tool.copy_before_action === true,
     prompt: typeof tool.prompt === 'string' ? tool.prompt : ''
   };
@@ -169,6 +203,48 @@ function normalizeProxy(proxy, { allowInherit = false, fallbackMode = 'system' }
   }
 
   return { mode: fallbackMode };
+}
+
+function normalizeTranslationService(service = {}, fallback = null) {
+  const defaultService = fallback || DEFAULT_TRANSLATION_SERVICES.find((item) => item.id === service?.id) || {};
+  const driver = SUPPORTED_TRANSLATION_SERVICE_DRIVERS.includes(service?.driver)
+    ? service.driver
+    : defaultService.driver;
+  const apiKey = String(service.api_key ?? defaultService.api_key ?? '').trim();
+  const endpoint = String(service.endpoint ?? defaultService.endpoint ?? '').trim().replace(/\/+$/, '');
+  const region = String(service.region ?? defaultService.region ?? '').trim();
+  const apiVariant = SUPPORTED_TRANSLATION_SERVICE_API_VARIANTS.includes(service?.api_variant)
+    ? service.api_variant
+    : defaultService.api_variant;
+  const authMode = String(defaultService.id || service?.id || '').trim() === 'bing-free'
+    ? 'api'
+    : apiKey
+      ? 'api'
+      : 'web';
+
+  return {
+    id: String(defaultService.id || service.id || '').trim(),
+    name: String(service.name || defaultService.name || '').trim() || String(defaultService.name || ''),
+    driver: String(driver || defaultService.driver || '').trim(),
+    enabled: service?.enabled !== undefined ? service.enabled !== false : defaultService.enabled !== false,
+    auth_mode: authMode,
+    api_key: apiKey,
+    endpoint,
+    region,
+    api_variant: String(apiVariant || defaultService.api_variant || '').trim()
+  };
+}
+
+function normalizeTranslationServices(services = []) {
+  const incomingById = new Map(
+    coerceArray(services)
+      .map((service) => [String(service?.id || '').trim(), service])
+      .filter(([id]) => Boolean(id) && id !== 'deepl-free')
+  );
+
+  return DEFAULT_TRANSLATION_SERVICES
+    .map((service) => normalizeTranslationService(incomingById.get(service.id), service))
+    .filter((service) => service.id && service.driver);
 }
 
 export function resolveProviderProxy(providerProxy, selectionProxy) {
@@ -304,6 +380,25 @@ function normalizeSelection(selection = {}, configVersion = 0) {
   const whitelistExes = coerceArray(selection?.whitelist_exes)
     .map((value) => String(value).trim().toLowerCase())
     .filter(Boolean);
+  const copyAppRules = coerceArray(selection?.copy_app_rules)
+    .map((rule) => {
+      const exePath = canonicalizeExePath(rule?.exe_path || '');
+
+      if (!exePath) {
+        return null;
+      }
+
+      return {
+        id: String(rule?.id || createId('copy-rule')).trim() || createId('copy-rule'),
+        label: String(rule?.label || '').trim() || inferProcessNameFromExePath(exePath) || '未命名程序',
+        enabled: rule?.enabled !== false,
+        mode: COPY_APP_RULE_MODES.includes(rule?.mode) ? rule.mode : 'auto',
+        exe_path: exePath,
+        process_name: String(rule?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(exePath),
+        source: COPY_APP_RULE_SOURCES.includes(rule?.source) ? rule.source : 'manual'
+      };
+    })
+    .filter(Boolean);
   const hardDisabledCategories = coerceArray(selection?.hard_disabled_categories)
     .map((value) => String(value).trim())
     .filter((value) => HARD_DISABLED_CATEGORIES.includes(value));
@@ -321,6 +416,9 @@ function normalizeSelection(selection = {}, configVersion = 0) {
     auxiliary_hotkey: auxiliaryHotkey,
     blacklist_exes: Array.from(new Set(blacklistExes)),
     whitelist_exes: Array.from(new Set(whitelistExes)),
+    copy_app_rules: Array.from(
+      new Map(copyAppRules.map((rule) => [normalizeExePath(rule.exe_path), rule])).values()
+    ),
     hard_disabled_categories:
       Array.isArray(selection?.hard_disabled_categories)
         ? Array.from(new Set(hardDisabledCategories))
@@ -388,6 +486,7 @@ function normalizeConfig(input = {}) {
     version: CONFIG_VERSION,
     tools: ensureBuiltinCopyTool(input.tools),
     ai_providers: coerceArray(input.ai_providers).map((provider) => normalizeProvider(provider)),
+    translation_services: normalizeTranslationServices(input.translation_services),
     selection: normalizeSelection(input.selection, configVersion),
     logging: normalizeLogging(input.logging),
     startup: normalizeStartup(input.startup),
@@ -457,4 +556,38 @@ export function getProviderById(providerId) {
     ...provider,
     proxy: resolveProviderProxy(provider.proxy, config.selection?.proxy)
   };
+}
+
+export function getTranslationServiceById(serviceId) {
+  const config = getConfig();
+  return config.translation_services.find((item) => item.id === serviceId) || null;
+}
+
+export function getTranslationTargetByRef(targetRef = {}) {
+  const kind = targetRef?.kind === 'service' ? 'service' : 'provider';
+  const id = String(targetRef?.id || '').trim();
+
+  if (!id) {
+    return null;
+  }
+
+  if (kind === 'service') {
+    const service = getTranslationServiceById(id);
+
+    return service
+      ? {
+          ...service,
+          kind: 'service'
+        }
+      : null;
+  }
+
+  const provider = getProviderById(id);
+
+  return provider
+    ? {
+        ...provider,
+        kind: 'provider'
+      }
+    : null;
 }

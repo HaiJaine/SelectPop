@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('settingsApi', {
   startHotkeyRecord: () => ipcRenderer.invoke('settings:start-hotkey-record'),
   stopHotkeyRecord: () => ipcRenderer.invoke('settings:stop-hotkey-record'),
   getDiagnostics: () => ipcRenderer.invoke('settings:get-diagnostics'),
+  listInstalledApps: () => ipcRenderer.invoke('settings:list-installed-apps'),
+  pickExePath: () => ipcRenderer.invoke('settings:pick-exe-path'),
   resolveToolIcon: (tool) => ipcRenderer.invoke('settings:resolve-tool-icon', tool),
   downloadToolIcon: (tool) => ipcRenderer.invoke('settings:download-tool-icon', tool),
   openLogsDirectory: () => ipcRenderer.invoke('settings:open-logs-directory'),

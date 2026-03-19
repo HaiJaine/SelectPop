@@ -220,6 +220,14 @@ body {
   padding: 0 10px;
   min-width: 0;
   scroll-padding-inline: 10px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.session-tabs::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .session-tabs.is-multi {

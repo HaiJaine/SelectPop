@@ -30,8 +30,27 @@ if (-not $process) {
   return
 }
 
+$processPath = ''
+
+try {
+  if ($process.Path) {
+    $processPath = [string]$process.Path
+  }
+} catch {
+}
+
+if (-not $processPath) {
+  try {
+    if ($process.MainModule -and $process.MainModule.FileName) {
+      $processPath = [string]$process.MainModule.FileName
+    }
+  } catch {
+  }
+}
+
 [pscustomobject]@{
   processId = [int]$processId
   name      = $process.ProcessName
+  path      = $processPath
   title     = $process.MainWindowTitle
 } | ConvertTo-Json -Compress

@@ -25,14 +25,28 @@ function normalizeEntry(entry) {
     return null;
   }
 
+  const targetKind = entry.targetKind === 'service' ? 'service' : 'provider';
+  const targetId = String(entry.targetId || entry.providerId || '').trim();
+  const targetName = String(entry.targetName || entry.providerName || '').trim();
+
   return {
     key: typeof entry.key === 'string' ? entry.key : '',
-    providerId: String(entry.providerId || '').trim(),
-    orderedProviderIds: Array.isArray(entry.orderedProviderIds) ? entry.orderedProviderIds.map(String) : [],
+    targetId,
+    targetKind,
+    orderedTargets: Array.isArray(entry.orderedTargets)
+      ? entry.orderedTargets
+          .map((target) => ({
+            kind: target?.kind === 'service' ? 'service' : 'provider',
+            id: String(target?.id || '').trim()
+          }))
+          .filter((target) => target.id)
+      : Array.isArray(entry.orderedProviderIds)
+        ? entry.orderedProviderIds.map((id) => ({ kind: 'provider', id: String(id || '').trim() })).filter((target) => target.id)
+        : [],
     markdown: String(entry.markdown || ''),
     text: String(entry.text || ''),
     tokens: Math.max(0, Number(entry.tokens || 0)),
-    providerName: String(entry.providerName || ''),
+    targetName,
     model: String(entry.model || ''),
     cachedAt: typeof entry.cachedAt === 'string' ? entry.cachedAt : ''
   };
@@ -69,7 +83,7 @@ export class TranslationCache {
       for (const [key, rawEntry] of Object.entries(payload?.entries || {})) {
         const entry = normalizeEntry(rawEntry);
 
-        if (entry?.providerId && entry.markdown) {
+        if (entry?.targetId && entry.markdown) {
           entries[key] = entry;
         }
       }
@@ -91,15 +105,24 @@ export class TranslationCache {
     this.loaded = true;
   }
 
-  createKey({ text, provider, orderedProviderIds, prompt }) {
+  createKey({ text, target, orderedTargets, prompt }) {
     const payload = {
       text: String(text || ''),
-      orderedProviderIds: Array.isArray(orderedProviderIds) ? orderedProviderIds.map(String) : [],
-      provider: {
-        id: String(provider?.id || ''),
-        base_url: String(provider?.base_url || ''),
-        model: String(provider?.model || ''),
-        request_params: provider?.request_params || {}
+      orderedTargets: Array.isArray(orderedTargets)
+        ? orderedTargets.map((item) => ({
+            kind: item?.kind === 'service' ? 'service' : 'provider',
+            id: String(item?.id || '')
+          }))
+        : [],
+      target: {
+        kind: target?.kind === 'service' ? 'service' : 'provider',
+        id: String(target?.id || ''),
+        base_url: String(target?.base_url || ''),
+        model: String(target?.model || target?.driver || ''),
+        request_params: target?.request_params || {},
+        auth_mode: String(target?.auth_mode || ''),
+        endpoint: String(target?.endpoint || ''),
+        api_variant: String(target?.api_variant || '')
       },
       prompt: String(prompt || '')
     };
@@ -111,7 +134,7 @@ export class TranslationCache {
     this.ensureLoaded();
     const key = typeof entryInput === 'string' ? entryInput : this.createKey(entryInput);
     const entry = normalizeEntry(this.state.entries[key]);
-    return entry?.providerId ? entry : null;
+    return entry?.targetId ? entry : null;
   }
 
   set(entryInput, value) {
@@ -123,7 +146,7 @@ export class TranslationCache {
       cachedAt: new Date().toISOString()
     });
 
-    if (!entry?.providerId || !entry.markdown) {
+    if (!entry?.targetId || !entry.markdown) {
       return null;
     }
 

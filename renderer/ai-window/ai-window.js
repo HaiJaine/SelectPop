@@ -1,7 +1,7 @@
 const state = {
   sourceText: '',
   sourceExpanded: false,
-  activeProviderId: '',
+  activeTargetId: '',
   pinned: false,
   sessions: new Map()
 };
@@ -29,12 +29,14 @@ function applyUiConfig(config = {}) {
 let tickerHandle = null;
 let renderHandle = null;
 let pendingRenderDelay = 0;
+let renderToken = 0;
 const buttonResetHandles = new Map();
 
 function createSession(payload) {
   return {
-    providerId: payload.providerId,
-    providerName: payload.providerName,
+    targetId: payload.targetId || payload.providerId,
+    targetName: payload.targetName || payload.providerName,
+    targetKind: payload.targetKind || 'provider',
     model: payload.model,
     markdown: '',
     statusText: '等待请求',
@@ -80,7 +82,7 @@ function getSessionStateLabel(session) {
 }
 
 function getActiveSession() {
-  return state.sessions.get(state.activeProviderId) || null;
+  return state.sessions.get(state.activeTargetId) || null;
 }
 
 function stopTicker() {
@@ -178,9 +180,10 @@ function renderActionButtons() {
 
   elements.copyButton.disabled = !hasMarkdown;
   elements.copyMarkdownButton.disabled = !hasMarkdown;
-  elements.retryButton.disabled = !hasSession;
+  elements.retryButton.disabled = !hasSession || activeSession?.streaming === true;
   syncButtonLabel(elements.copyButton, '复制译文');
   syncButtonLabel(elements.copyMarkdownButton, '复制 Markdown');
+  syncButtonLabel(elements.retryButton, activeSession?.streaming ? '请求中...' : '重新翻译');
 }
 
 function renderHeader() {
@@ -195,6 +198,11 @@ function renderMeta() {
   elements.metaText.title = activeSession?.metaText || '';
 }
 
+function renderResultMarkup(markup, { streaming = false } = {}) {
+  elements.resultContent.classList.toggle('streaming', streaming);
+  elements.resultContent.innerHTML = markup;
+}
+
 function renderTabs() {
   const sessions = Array.from(state.sessions.values());
   elements.sessionTabs.classList.toggle('is-multi', sessions.length > 1);
@@ -205,11 +213,11 @@ function renderTabs() {
 
       return `
         <button
-          class="session-tab ${state.activeProviderId === session.providerId ? 'active' : ''}"
+          class="session-tab ${state.activeTargetId === session.targetId ? 'active' : ''}"
           type="button"
-          data-provider-id="${session.providerId}"
+          data-target-id="${session.targetId}"
         >
-          <span class="session-tab-name">${escapeHtml(session.providerName)}</span>
+          <span class="session-tab-name">${escapeHtml(session.targetName)}</span>
           <span class="session-tab-state">${stateLabel}</span>
         </button>
       `;
@@ -222,13 +230,13 @@ function renderTabs() {
     console.warn('[SelectPop] Expected multiple AI tabs, but fewer were rendered.', {
       expected: sessions.length,
       rendered: renderedTabCount,
-      activeProviderId: state.activeProviderId
+      activeTargetId: state.activeTargetId
     });
     window.aiWindowApi.reportUiDiagnostic?.({
       type: 'tabs-rendered-less-than-expected',
       expectedCount: sessions.length,
       renderedCount: renderedTabCount,
-      activeProviderId: state.activeProviderId
+      activeTargetId: state.activeTargetId
     });
   }
 }
@@ -277,7 +285,7 @@ async function getCopyPayload(session, format) {
 
   try {
     const html = await window.aiWindowApi.renderMarkdown(markdown, {
-      providerId: session?.providerId || '',
+      targetId: session?.targetId || '',
       silent: true
     });
     return extractPlainTextFromHtml(html) || markdown;
@@ -313,7 +321,7 @@ async function copyActiveSession(format) {
 
     window.aiWindowApi.reportUiDiagnostic?.({
       type: 'copy-action',
-      providerId: activeSession.providerId,
+      targetId: activeSession.targetId,
       copyType: format,
       textLength: payload.length
     });
@@ -330,75 +338,96 @@ async function copyActiveSession(format) {
     );
     window.aiWindowApi.reportUiDiagnostic?.({
       type: 'copy-failed',
-      providerId: activeSession.providerId,
+      targetId: activeSession.targetId,
       copyType: format,
       message: error instanceof Error ? error.message : String(error)
     });
   }
 }
 
-async function flushMarkdown() {
+async function flushMarkdown(targetId = state.activeTargetId) {
+  if (renderHandle) {
+    clearTimeout(renderHandle);
+  }
   renderHandle = null;
   pendingRenderDelay = 0;
-  const activeSession = getActiveSession();
-  const activeProviderId = state.activeProviderId;
+  const activeTargetId = String(targetId || '').trim();
+  const activeSession = state.sessions.get(activeTargetId) || null;
+  const currentRenderToken = ++renderToken;
   const markdown = String(activeSession?.markdown || '');
 
+  if (!activeTargetId || state.activeTargetId !== activeTargetId) {
+    return;
+  }
+
   if (!activeSession) {
-    elements.resultContent.classList.remove('streaming');
-    elements.resultContent.innerHTML = '<p class="placeholder">点击 AI 工具后将在这里显示翻译结果。</p>';
+    renderResultMarkup('<p class="placeholder">点击 AI 工具后将在这里显示翻译结果。</p>');
     return;
   }
 
   if (activeSession.errorMessage) {
-    elements.resultContent.classList.remove('streaming');
-    elements.resultContent.innerHTML = `<div class="error-block">${activeSession.errorMessage}</div>`;
+    renderResultMarkup(`<div class="error-block">${activeSession.errorMessage}</div>`);
     return;
   }
 
   if (!markdown) {
-    elements.resultContent.classList.remove('streaming');
-    elements.resultContent.innerHTML = activeSession.completed
-      ? '<p class="placeholder">模型返回了空内容。</p>'
-      : '<p class="placeholder">正在等待返回内容...</p>';
+    renderResultMarkup(
+      activeSession.completed
+        ? '<p class="placeholder">模型返回了空内容。</p>'
+        : '<p class="placeholder">正在等待返回内容...</p>'
+    );
     return;
   }
 
   try {
     const html = await window.aiWindowApi.renderMarkdown(markdown, {
-      providerId: activeSession.providerId,
+      targetId: activeSession.targetId,
       completed: activeSession.completed
     });
-    const latestSession = state.sessions.get(activeProviderId);
+    const latestSession = state.sessions.get(activeTargetId);
 
-    if (!latestSession || state.activeProviderId !== activeProviderId || latestSession.markdown !== markdown) {
+    if (
+      currentRenderToken !== renderToken
+      || !latestSession
+      || state.activeTargetId !== activeTargetId
+      || latestSession.markdown !== markdown
+    ) {
+      if (state.activeTargetId === activeTargetId) {
+        scheduleMarkdownRender(true);
+      }
       return;
     }
 
-    elements.resultContent.innerHTML = html;
+    renderResultMarkup(html, { streaming: latestSession.streaming });
   } catch (error) {
     console.error('[SelectPop] AI markdown render failed:', error);
     window.aiWindowApi.reportUiDiagnostic?.({
       type: 'markdown-render-failed',
-      providerId: activeSession.providerId,
+      targetId: activeSession.targetId,
       textLength: markdown.length,
       message: error instanceof Error ? error.message : String(error)
     });
-    const latestSession = state.sessions.get(activeProviderId);
+    const latestSession = state.sessions.get(activeTargetId);
 
-    if (!latestSession || state.activeProviderId !== activeProviderId || latestSession.markdown !== markdown) {
+    if (
+      currentRenderToken !== renderToken
+      || !latestSession
+      || state.activeTargetId !== activeTargetId
+      || latestSession.markdown !== markdown
+    ) {
+      if (state.activeTargetId === activeTargetId) {
+        scheduleMarkdownRender(true);
+      }
       return;
     }
 
-    elements.resultContent.innerHTML = '<pre class="plain-markdown"></pre>';
+    renderResultMarkup('<pre class="plain-markdown"></pre>', { streaming: latestSession.streaming });
     const fallbackElement = elements.resultContent.querySelector('.plain-markdown');
 
     if (fallbackElement) {
       fallbackElement.textContent = markdown;
     }
   }
-
-  elements.resultContent.classList.toggle('streaming', activeSession.streaming);
 
   try {
     await window.aiWindowApi.enhanceCodeBlocks('#result-content');
@@ -423,7 +452,7 @@ function scheduleMarkdownRender(force = false) {
   renderHandle = setTimeout(() => {
     renderHandle = null;
     pendingRenderDelay = 0;
-    void flushMarkdown();
+    void flushMarkdown(state.activeTargetId);
   }, nextDelay);
 }
 
@@ -432,19 +461,19 @@ function resetForSession(payload) {
   resetButtonFeedback();
   state.sourceText = payload.text || '';
   state.sourceExpanded = false;
-  state.activeProviderId = payload.activeProviderId || payload.sessions?.[0]?.providerId || '';
+  state.activeTargetId = payload.activeTargetId || payload.sessions?.[0]?.targetId || payload.sessions?.[0]?.providerId || '';
   state.pinned = Boolean(payload.pinned);
-  state.sessions = new Map((payload.sessions || []).map((session) => [session.providerId, createSession(session)]));
+  state.sessions = new Map((payload.sessions || []).map((session) => [session.targetId || session.providerId, createSession(session)]));
   renderTabs();
   scrollActiveTabIntoView();
   renderHeader();
   renderMeta();
-  scheduleMarkdownRender(true);
+  void flushMarkdown(state.activeTargetId);
   syncTicker();
 }
 
-function updateSession(providerId, updater) {
-  const session = state.sessions.get(providerId);
+function updateSession(targetId, updater) {
+  const session = state.sessions.get(targetId);
 
   if (!session) {
     return null;
@@ -453,7 +482,7 @@ function updateSession(providerId, updater) {
   updater(session);
   renderTabs();
 
-  if (state.activeProviderId === providerId) {
+  if (state.activeTargetId === targetId) {
     renderHeader();
     renderMeta();
     scheduleMarkdownRender(session.completed === true);
@@ -466,7 +495,7 @@ function updateSession(providerId, updater) {
 
 window.aiWindowApi.onSession(resetForSession);
 window.aiWindowApi.onStreamStart((payload) => {
-  updateSession(payload.providerId, (session) => {
+  updateSession(payload.targetId || payload.providerId, (session) => {
     session.streaming = true;
     session.startedAt = payload.startedAt;
     session.statusText = payload.cached ? '已命中缓存' : '正在翻译...';
@@ -483,15 +512,15 @@ window.aiWindowApi.onStreamStart((payload) => {
   });
   syncTicker();
 });
-window.aiWindowApi.onChunk(({ providerId, chunk }) => {
-  updateSession(providerId, (session) => {
+window.aiWindowApi.onChunk(({ targetId, providerId, chunk }) => {
+  updateSession(targetId || providerId, (session) => {
     session.markdown = session.pendingReset ? chunk : `${session.markdown}${chunk}`;
     session.pendingReset = false;
     session.receivedContent = session.markdown.trim().length > 0;
   });
 });
-window.aiWindowApi.onDone(({ providerId, timeMs, tokens, cached }) => {
-  updateSession(providerId, (session) => {
+window.aiWindowApi.onDone(({ targetId, providerId, timeMs, tokens, cached }) => {
+  updateSession(targetId || providerId, (session) => {
     session.streaming = false;
     session.tokens = tokens || 0;
     session.statusText = '完成';
@@ -502,8 +531,8 @@ window.aiWindowApi.onDone(({ providerId, timeMs, tokens, cached }) => {
     session.completed = true;
   });
 });
-window.aiWindowApi.onRetrying(({ providerId, message }) => {
-  updateSession(providerId, (session) => {
+window.aiWindowApi.onRetrying(({ targetId, providerId, message }) => {
+  updateSession(targetId || providerId, (session) => {
     session.statusText = message;
     session.errorMessage = '';
     session.streaming = true;
@@ -511,16 +540,16 @@ window.aiWindowApi.onRetrying(({ providerId, message }) => {
     session.pendingReset = true;
   });
 });
-window.aiWindowApi.onError(({ providerId, message }) => {
-  updateSession(providerId, (session) => {
+window.aiWindowApi.onError(({ targetId, providerId, message }) => {
+  updateSession(targetId || providerId, (session) => {
     session.streaming = false;
     session.statusText = '请求失败';
     session.errorMessage = message;
     session.completed = true;
   });
 });
-window.aiWindowApi.onAborted(({ providerId }) => {
-  updateSession(providerId, (session) => {
+window.aiWindowApi.onAborted(({ targetId, providerId }) => {
+  updateSession(targetId || providerId, (session) => {
     session.streaming = false;
     session.statusText = '请求已中断';
     session.errorMessage = '请求已中断。';
@@ -536,18 +565,18 @@ window.aiWindowApi.onUiConfig((payload) => {
 });
 
 elements.sessionTabs.addEventListener('click', (event) => {
-  const tab = event.target.closest('[data-provider-id]');
+  const tab = event.target.closest('[data-target-id]');
 
   if (!tab) {
     return;
   }
 
-  state.activeProviderId = tab.dataset.providerId;
+  state.activeTargetId = tab.dataset.targetId;
   renderTabs();
   scrollActiveTabIntoView();
   renderHeader();
   renderMeta();
-  scheduleMarkdownRender(true);
+  void flushMarkdown(state.activeTargetId);
 });
 
 elements.sessionTabs.addEventListener(
@@ -621,7 +650,7 @@ elements.retryButton.addEventListener('click', () => {
   renderHeader();
   renderMeta();
   scheduleMarkdownRender();
-  window.aiWindowApi.retry(activeSession.providerId);
+  window.aiWindowApi.retry(activeSession.targetId);
 });
 
 window.addEventListener('beforeunload', () => {

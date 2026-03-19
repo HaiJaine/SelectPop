@@ -79,8 +79,12 @@ function shiftBounds(bounds, offsetX, offsetY) {
   };
 }
 
-function resolveEffectivePrompt(provider, prompt) {
-  return String(prompt || provider?.prompt || AI_SYSTEM_PROMPT).trim() || AI_SYSTEM_PROMPT;
+function resolveEffectivePrompt(target, prompt) {
+  if (target?.kind !== 'provider') {
+    return '';
+  }
+
+  return String(prompt || target?.prompt || AI_SYSTEM_PROMPT).trim() || AI_SYSTEM_PROMPT;
 }
 
 function buildUiConfigPayload(config = {}) {
@@ -89,20 +93,21 @@ function buildUiConfigPayload(config = {}) {
   };
 }
 
-function buildWindowSessions(providers) {
-  return providers.map((provider) => ({
-    providerId: provider.id,
-    providerName: provider.name,
-    model: provider.model
+function buildWindowSessions(targets) {
+  return targets.map((target) => ({
+    targetId: target.id,
+    targetName: target.name,
+    targetKind: target.kind === 'service' ? 'service' : 'provider',
+    model: target.kind === 'provider' ? target.model : target.driver
   }));
 }
 
 export class AiWindowManager {
   constructor(
     getConfig,
-    getProviderById,
+    getTranslationTargetByRef,
     {
-      startAiTranslation,
+      startTranslation,
       logger = null,
       saveBounds = null,
       translationCache = null,
@@ -110,8 +115,8 @@ export class AiWindowManager {
     } = {}
   ) {
     this.getConfig = getConfig;
-    this.getProviderById = getProviderById;
-    this.startAiTranslation = startAiTranslation;
+    this.getTranslationTargetByRef = getTranslationTargetByRef;
+    this.startTranslation = startTranslation;
     this.logger = logger;
     this.saveBounds = saveBounds;
     this.translationCache = translationCache;
@@ -400,21 +405,32 @@ export class AiWindowManager {
     return this.records.get(webContents.id) || null;
   }
 
-  async openTranslation({ text, providerId, providerIds = [], prompt = '', anchorBounds }) {
-    const resolvedProviderIds = Array.from(
-      new Set(
-        (Array.isArray(providerIds) && providerIds.length ? providerIds : [providerId])
-          .map((value) => String(value || '').trim())
-          .filter(Boolean)
-      )
+  async openTranslation({ text, providerId, providerIds = [], translationTargets = [], prompt = '', anchorBounds }) {
+    const resolvedTargetRefs = Array.from(
+      new Map(
+        (
+          Array.isArray(translationTargets) && translationTargets.length
+            ? translationTargets
+            : (Array.isArray(providerIds) && providerIds.length ? providerIds : [providerId]).map((id) => ({
+                kind: 'provider',
+                id
+              }))
+        )
+          .map((target) => ({
+            kind: target?.kind === 'service' ? 'service' : 'provider',
+            id: String(target?.id || '').trim()
+          }))
+          .filter((target) => target.id)
+          .map((target) => [`${target.kind}:${target.id}`, target])
+      ).values()
     );
 
-    const providers = resolvedProviderIds
-      .map((id) => this.getProviderById(id))
+    const targets = resolvedTargetRefs
+      .map((target) => this.getTranslationTargetByRef(target))
       .filter(Boolean);
 
-    if (!providers.length) {
-      throw new Error('未找到对应的 AI 提供商，请先在设置中配置。');
+    if (!targets.length) {
+      throw new Error('未找到可用的翻译目标，请先在设置中配置。');
     }
 
     let record = this.getReusableRecord();
@@ -431,10 +447,14 @@ export class AiWindowManager {
     record.currentPayload = {
       sessionId,
       text,
-      activeProviderId: providers[0].id,
-      orderedProviderIds: providers.map((provider) => provider.id),
-      sessions: providers.map((provider) => ({
-        providerId: provider.id,
+      activeTargetId: targets[0].id,
+      orderedTargets: targets.map((target) => ({
+        kind: target.kind,
+        id: target.id
+      })),
+      sessions: targets.map((target) => ({
+        targetId: target.id,
+        targetKind: target.kind,
         prompt: promptText
       }))
     };
@@ -446,24 +466,24 @@ export class AiWindowManager {
     this.notifyStateChanged('translation-opened');
     this.logger?.info('Opening AI translation window.', {
       sessionId,
-      providerIds: providers.map((provider) => provider.id),
-      sessionCount: providers.length,
-      activeProviderId: providers[0].id,
+      targetIds: targets.map((target) => `${target.kind}:${target.id}`),
+      sessionCount: targets.length,
+      activeTargetId: targets[0].id,
       textLength: text.length
     });
     record.window.webContents.send('ai:session', {
       sessionId,
       text,
-      activeProviderId: providers[0].id,
+      activeTargetId: targets[0].id,
       pinned: record.pinned,
-      sessions: buildWindowSessions(providers)
+      sessions: buildWindowSessions(targets)
     });
 
-    for (const provider of providers) {
-      void this.startRequest(record, sessionId, provider, text, promptText, {
+    for (const target of targets) {
+      void this.startRequest(record, sessionId, target, text, promptText, {
         useCache: true,
         preserveExistingOnStart: false,
-        orderedProviderIds: providers.map((item) => item.id)
+        orderedTargets: record.currentPayload.orderedTargets
       });
     }
   }
@@ -471,32 +491,32 @@ export class AiWindowManager {
   async startRequest(
     record,
     sessionId,
-    provider,
+    target,
     text,
     prompt,
-    { attempt = 1, useCache = true, preserveExistingOnStart = false, orderedProviderIds = [] } = {}
+    { attempt = 1, useCache = true, preserveExistingOnStart = false, orderedTargets = [] } = {}
   ) {
     if (!record || record.window.isDestroyed()) {
       return;
     }
 
-    if (typeof this.startAiTranslation !== 'function') {
-      throw new Error('AI translation runner is not available.');
+    if (typeof this.startTranslation !== 'function') {
+      throw new Error('Translation runner is not available.');
     }
 
-    const previousRequest = record.requests.get(provider.id);
+    const previousRequest = record.requests.get(target.id);
     previousRequest?.abortController?.abort();
 
     const abortController = new AbortController();
     const startedAt = Date.now();
-    record.requests.set(provider.id, { abortController, sessionId, text, prompt });
+    record.requests.set(target.id, { abortController, sessionId, text, prompt });
     this.notifyStateChanged('request-started');
 
-    const effectivePrompt = resolveEffectivePrompt(provider, prompt);
+    const effectivePrompt = resolveEffectivePrompt(target, prompt);
     const cacheKey = this.translationCache?.createKey({
       text,
-      provider,
-      orderedProviderIds,
+      target,
+      orderedTargets,
       prompt: effectivePrompt
     });
 
@@ -504,47 +524,51 @@ export class AiWindowManager {
       const cachedEntry = this.translationCache?.get(cacheKey);
 
       if (cachedEntry?.markdown) {
-        this.logger?.info('AI translation cache hit.', {
+        this.logger?.info('Translation cache hit.', {
           sessionId,
-          providerId: provider.id,
+          targetId: target.id,
+          targetKind: target.kind,
           textLength: text.length
         });
         this.#sendIfCurrent(record, sessionId, 'ai:stream-start', {
-          providerId: provider.id,
-          providerName: provider.name,
-          model: provider.model,
+          targetId: target.id,
+          targetName: target.name,
+          targetKind: target.kind,
+          model: target.kind === 'provider' ? target.model : target.driver,
           startedAt,
           attempt,
           cached: true,
           preserveExisting: false
         });
         this.#sendIfCurrent(record, sessionId, 'ai:chunk', {
-          providerId: provider.id,
+          targetId: target.id,
           chunk: cachedEntry.markdown,
           cached: true
         });
         this.#sendIfCurrent(record, sessionId, 'ai:done', {
-          providerId: provider.id,
+          targetId: target.id,
           timeMs: 0,
           tokens: cachedEntry.tokens || 0,
           cached: true
         });
-        record.requests.delete(provider.id);
+        record.requests.delete(target.id);
         return;
       }
     }
 
-    this.logger?.info('Starting AI translation request.', {
+    this.logger?.info('Starting translation request.', {
       sessionId,
-      providerId: provider.id,
-      model: provider.model,
+      targetId: target.id,
+      targetKind: target.kind,
+      model: target.kind === 'provider' ? target.model : target.driver,
       textLength: text.length,
       attempt
     });
     this.#sendIfCurrent(record, sessionId, 'ai:stream-start', {
-      providerId: provider.id,
-      providerName: provider.name,
-      model: provider.model,
+      targetId: target.id,
+      targetName: target.name,
+      targetKind: target.kind,
+      model: target.kind === 'provider' ? target.model : target.driver,
       startedAt,
       attempt,
       preserveExisting: preserveExistingOnStart === true
@@ -553,143 +577,155 @@ export class AiWindowManager {
     let firstChunkAt = 0;
 
     try {
-      await this.startAiTranslation(
-        provider,
+      await this.startTranslation(
+        target,
         text,
-        prompt,
+        target.kind === 'provider' ? prompt : '',
         {
           onChunk: (chunk) => {
             if (!firstChunkAt) {
               firstChunkAt = Date.now();
-              this.logger?.info('AI translation first chunk received.', {
+              this.logger?.info('Translation first chunk received.', {
                 sessionId,
-                providerId: provider.id,
+                targetId: target.id,
+                targetKind: target.kind,
                 firstChunkMs: firstChunkAt - startedAt
               });
             }
             emittedMarkdown += chunk;
             this.#sendIfCurrent(record, sessionId, 'ai:chunk', {
-              providerId: provider.id,
+              targetId: target.id,
               chunk
             });
           },
           onDone: (tokens) => {
             if (cacheKey && emittedMarkdown.trim()) {
               this.translationCache?.set(cacheKey, {
-                providerId: provider.id,
-                providerName: provider.name,
-                orderedProviderIds,
+                targetId: target.id,
+                targetKind: target.kind,
+                targetName: target.name,
+                orderedTargets,
                 text,
                 markdown: emittedMarkdown,
                 tokens,
-                model: provider.model
+                model: target.kind === 'provider' ? target.model : target.driver
               });
             }
-            this.logger?.info('AI translation request completed.', {
+            this.logger?.info('Translation request completed.', {
               sessionId,
-              providerId: provider.id,
+              targetId: target.id,
+              targetKind: target.kind,
               timeMs: Date.now() - startedAt,
               tokens
             });
             this.#sendIfCurrent(record, sessionId, 'ai:done', {
-              providerId: provider.id,
+              targetId: target.id,
               timeMs: Date.now() - startedAt,
               tokens
             });
           }
         },
-        abortController.signal
+        abortController.signal,
+        {
+          proxy: target.kind === 'service' ? this.getConfig()?.selection?.proxy : undefined
+        }
       );
     } catch (error) {
       if (abortController.signal.aborted) {
-        this.logger?.warn('AI translation request aborted.', {
+        this.logger?.warn('Translation request aborted.', {
           sessionId,
-          providerId: provider.id
+          targetId: target.id,
+          targetKind: target.kind
         });
         this.#sendIfCurrent(record, sessionId, 'ai:aborted', {
-          providerId: provider.id
+          targetId: target.id
         });
         return;
       }
 
       if (attempt === 1) {
-        this.logger?.warn('AI translation request failed, retrying.', {
+        this.logger?.warn('Translation request failed, retrying.', {
           sessionId,
-          providerId: provider.id,
+          targetId: target.id,
+          targetKind: target.kind,
           message: error instanceof Error ? error.message : String(error)
         });
         this.#sendIfCurrent(record, sessionId, 'ai:retrying', {
-          providerId: provider.id,
+          targetId: target.id,
           message: '首次请求失败，正在自动重试...'
         });
-        await this.startRequest(record, sessionId, provider, text, prompt, {
+        await this.startRequest(record, sessionId, target, text, prompt, {
           attempt: 2,
           useCache: false,
           preserveExistingOnStart,
-          orderedProviderIds
+          orderedTargets
         });
         return;
       }
 
-      this.logger?.error('AI translation request failed.', {
+      this.logger?.error('Translation request failed.', {
         sessionId,
-        providerId: provider.id,
+        targetId: target.id,
+        targetKind: target.kind,
         message: error instanceof Error ? error.message : String(error)
       });
       this.#sendIfCurrent(record, sessionId, 'ai:error', {
-        providerId: provider.id,
+        targetId: target.id,
         message: error instanceof Error ? error.message : String(error)
       });
     } finally {
-      const activeRequest = record.requests.get(provider.id);
+      const activeRequest = record.requests.get(target.id);
 
       if (activeRequest?.abortController === abortController) {
-        record.requests.delete(provider.id);
+        record.requests.delete(target.id);
         this.notifyStateChanged('request-finished');
       }
     }
   }
 
-  async retry(webContents, providerId) {
+  async retry(webContents, targetId) {
     const record = this.getRecordByWebContents(webContents);
 
     if (!record?.currentPayload) {
       return;
     }
 
-    const targetProviderId =
-      String(providerId || '').trim() || record.currentPayload.activeProviderId || record.currentPayload.sessions[0]?.providerId;
+    const effectiveTargetId =
+      String(targetId || '').trim() || record.currentPayload.activeTargetId || record.currentPayload.sessions[0]?.targetId;
 
-    const session = record.currentPayload.sessions.find((item) => item.providerId === targetProviderId);
+    const session = record.currentPayload.sessions.find((item) => item.targetId === effectiveTargetId);
 
     if (!session) {
-      throw new Error('AI 会话不存在。');
+      throw new Error('翻译会话不存在。');
     }
 
-    const provider = this.getProviderById(session.providerId);
+    const target = this.getTranslationTargetByRef({
+      kind: session.targetKind,
+      id: session.targetId
+    });
 
-    if (!provider) {
-      throw new Error('AI 提供商不存在。');
+    if (!target) {
+      throw new Error('翻译目标不存在。');
     }
 
-    record.currentPayload.activeProviderId = session.providerId;
-    await this.startRequest(record, record.currentPayload.sessionId, provider, record.currentPayload.text, session.prompt, {
+    record.currentPayload.activeTargetId = session.targetId;
+    await this.startRequest(record, record.currentPayload.sessionId, target, record.currentPayload.text, session.prompt, {
       attempt: 1,
       useCache: false,
       preserveExistingOnStart: true,
-      orderedProviderIds: record.currentPayload.orderedProviderIds || []
+      orderedTargets: record.currentPayload.orderedTargets || []
     });
   }
 
-  abort(webContents, providerId = null) {
+  abort(webContents, targetId = null) {
     const record = this.getRecordByWebContents(webContents);
 
     if (!record) {
       return;
     }
 
-    if (providerId) {
-      record.requests.get(providerId)?.abortController?.abort();
+    if (targetId) {
+      record.requests.get(targetId)?.abortController?.abort();
       return;
     }
 

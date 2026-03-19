@@ -62,11 +62,40 @@ Rules:
 7. The final output must be Simplified Chinese text that can be rendered directly in Markdown + MathJax.
 
 Output only the translation.`;
+const DEFAULT_TRANSLATION_SERVICES = [
+  {
+    id: 'google-free',
+    name: 'Google 翻译',
+    driver: 'google-web',
+    enabled: true,
+    auth_mode: 'web',
+    api_key: '',
+    endpoint: 'https://translation.googleapis.com/language/translate/v2',
+    region: '',
+    api_variant: 'basic-v2'
+  },
+  {
+    id: 'bing-free',
+    name: 'Bing 翻译',
+    driver: 'bing-api',
+    enabled: false,
+    auth_mode: 'api',
+    api_key: '',
+    endpoint: 'https://api.cognitive.microsofttranslator.com',
+    region: '',
+    api_variant: 'azure'
+  }
+];
 const QUICK_PICK_ICON_IDS = [
   'copy',
   'keyboard',
   'search',
   'translate'
+];
+const COPY_APP_RULE_MODE_OPTIONS = [
+  { id: 'auto', label: '默认自动' },
+  { id: 'force_copy', label: '强制 Ctrl+C' },
+  { id: 'skip_copy', label: '禁止 Ctrl+C' }
 ];
 
 const state = {
@@ -82,6 +111,7 @@ const state = {
   toolIconPending: new Map(),
   selectionDraft: null,
   webDavDraft: null,
+  installedApps: [],
   diagnostics: null,
   toasts: [],
   status: {
@@ -133,6 +163,10 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function createClientId(prefix = 'id') {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replaceAll('&', '&amp;')
@@ -140,6 +174,182 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function normalizeExePath(value) {
+  const text = String(value || '').trim().replace(/^"(.*)"$/u, '$1').replaceAll('/', '\\');
+  return text || '';
+}
+
+function inferProcessNameFromExePath(exePath) {
+  const normalizedPath = normalizeExePath(exePath);
+
+  if (!normalizedPath) {
+    return '';
+  }
+
+  const segments = normalizedPath.split(/\\+/u).filter(Boolean);
+  return String(segments[segments.length - 1] || '').trim().toLowerCase();
+}
+
+function normalizeCopyAppRuleMode(mode) {
+  return COPY_APP_RULE_MODE_OPTIONS.some((item) => item.id === mode) ? mode : 'auto';
+}
+
+function getCopyAppRuleModeLabel(mode) {
+  return COPY_APP_RULE_MODE_OPTIONS.find((item) => item.id === mode)?.label || '默认自动';
+}
+
+function normalizeTranslationTarget(target) {
+  const kind = target?.kind === 'service' ? 'service' : 'provider';
+  const id = String(target?.id || '').trim();
+
+  if (!id) {
+    return null;
+  }
+
+  return { kind, id };
+}
+
+function serializeTranslationTarget(target) {
+  const normalized = normalizeTranslationTarget(target);
+  return normalized ? `${normalized.kind}:${normalized.id}` : '';
+}
+
+function deserializeTranslationTarget(serialized) {
+  const [rawKind = 'provider', ...rest] = String(serialized || '').split(':');
+  const id = rest.join(':').trim();
+
+  if (!id) {
+    return null;
+  }
+
+  return {
+    kind: rawKind === 'service' ? 'service' : 'provider',
+    id
+  };
+}
+
+function getToolTranslationTargets(tool = {}) {
+  const rawTargets = Array.isArray(tool.translation_targets) && tool.translation_targets.length
+    ? tool.translation_targets
+    : (Array.isArray(tool.provider_ids) && tool.provider_ids.length
+        ? tool.provider_ids
+        : tool.provider_id
+          ? [tool.provider_id]
+          : []
+      ).map((id) => ({ kind: 'provider', id }));
+
+  return Array.from(
+    new Map(
+      rawTargets
+        .map((target) => normalizeTranslationTarget(target))
+        .filter(Boolean)
+        .map((target) => [serializeTranslationTarget(target), target])
+    ).values()
+  );
+}
+
+function syncDraftLegacyProviderFields() {
+  if (!state.drawer?.draft) {
+    return;
+  }
+
+  const providerIds = getToolTranslationTargets(state.drawer.draft)
+    .filter((target) => target.kind === 'provider')
+    .map((target) => target.id);
+
+  state.drawer.draft.provider_ids = providerIds;
+  state.drawer.draft.provider_id = providerIds[0] || '';
+}
+
+function getTranslationTargetMeta(target) {
+  const normalized = normalizeTranslationTarget(target);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.kind === 'service') {
+    const service = (state.config?.translation_services || []).find((item) => item.id === normalized.id);
+
+    return service
+      ? {
+          kind: 'service',
+          id: service.id,
+          name: service.name,
+          meta: getTranslationServiceModeLabel(service),
+          enabled: service.enabled !== false
+        }
+      : null;
+  }
+
+  const provider = (state.config?.ai_providers || []).find((item) => item.id === normalized.id);
+
+  return provider
+    ? {
+        kind: 'provider',
+        id: provider.id,
+        name: provider.name,
+        meta: provider.model,
+        enabled: true
+      }
+    : null;
+}
+
+function hasTranslationServiceApiKey(service = {}) {
+  return String(service.api_key || '').trim().length > 0;
+}
+
+function getTranslationServiceModeLabel(service = {}) {
+  if (service.id === 'bing-free') {
+    return '官方 API';
+  }
+
+  return hasTranslationServiceApiKey(service) ? '官方 API' : '网页翻译';
+}
+
+function getTranslationServiceBadgeLabel(service = {}) {
+  return service.id === 'bing-free' ? 'Azure Translator' : 'Google 翻译';
+}
+
+function getTranslationServiceStatusLabel(service = {}) {
+  if (service.id === 'bing-free') {
+    if (service.enabled === false) {
+      return '已禁用';
+    }
+
+    return hasTranslationServiceApiKey(service) ? '已启用' : '未配置 Key';
+  }
+
+  return service.enabled !== false ? '已启用' : '已隐藏';
+}
+
+function getSelectableTranslationTargets() {
+  return [
+    ...(state.config?.ai_providers || []).map((provider) => ({
+      kind: 'provider',
+      id: provider.id,
+      name: provider.name,
+      meta: provider.model,
+      enabled: true
+    })),
+    ...(state.config?.translation_services || []).map((service) => ({
+      kind: 'service',
+      id: service.id,
+      name: service.name,
+      meta: getTranslationServiceModeLabel(service),
+      enabled: service.enabled !== false
+    }))
+  ];
+}
+
+function getVisibleToolTranslationTargets(draft) {
+  const selectedKeys = new Set(getToolTranslationTargets(draft).map((target) => serializeTranslationTarget(target)));
+
+  return getSelectableTranslationTargets().filter((target) => (
+    target.kind === 'provider' || target.enabled !== false || selectedKeys.has(serializeTranslationTarget(target))
+  ));
 }
 
 function formatMemorySize(bytes) {
@@ -648,6 +858,17 @@ function ensureSelectionDraft() {
 function createSelectionDraft(selection) {
   return {
     ...deepClone(selection),
+    copy_app_rules: Array.isArray(selection?.copy_app_rules)
+      ? selection.copy_app_rules.map((rule) => ({
+          id: String(rule?.id || createClientId('copy-rule')),
+          label: String(rule?.label || '').trim() || inferProcessNameFromExePath(rule?.exe_path || '') || '未命名程序',
+          enabled: rule?.enabled !== false,
+          mode: normalizeCopyAppRuleMode(rule?.mode),
+          exe_path: normalizeExePath(rule?.exe_path || ''),
+          process_name: String(rule?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(rule?.exe_path || ''),
+          source: rule?.source === 'installed' ? 'installed' : 'manual'
+        }))
+      : [],
     blacklist_text: formatLineList(selection.blacklist_exes),
     whitelist_text: formatLineList(selection.whitelist_exes),
     toolbar_offset_x: Number(selection?.toolbar_offset?.x ?? 0),
@@ -658,6 +879,54 @@ function createSelectionDraft(selection) {
     proxy_host: selection?.proxy?.host || '',
     proxy_port: selection?.proxy?.port || ''
   };
+}
+
+function getSelectionCopyAppRules(draft = state.selectionDraft) {
+  return Array.isArray(draft?.copy_app_rules) ? draft.copy_app_rules : [];
+}
+
+function createCopyAppRuleDraft(rule = null) {
+  const exePath = normalizeExePath(rule?.exe_path || '');
+  const processName = String(rule?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(exePath);
+
+  return {
+    id: String(rule?.id || createClientId('copy-rule')),
+    label: String(rule?.label || '').trim() || processName || '未命名程序',
+    enabled: rule?.enabled !== false,
+    mode: normalizeCopyAppRuleMode(rule?.mode || 'force_copy'),
+    exe_path: exePath,
+    process_name: processName,
+    source: rule?.source === 'installed' ? 'installed' : 'manual'
+  };
+}
+
+function buildCopyAppRulePayload(draft) {
+  const exePath = normalizeExePath(draft?.exe_path || '');
+  const processName = String(draft?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(exePath);
+
+  if (!exePath) {
+    throw new Error('请选择有效的 exe 路径。');
+  }
+
+  return {
+    id: String(draft?.id || createClientId('copy-rule')),
+    label: String(draft?.label || '').trim() || processName || '未命名程序',
+    enabled: draft?.enabled !== false,
+    mode: normalizeCopyAppRuleMode(draft?.mode),
+    exe_path: exePath,
+    process_name: processName,
+    source: draft?.source === 'installed' ? 'installed' : 'manual'
+  };
+}
+
+async function ensureInstalledAppsLoaded(force = false) {
+  if (!force && Array.isArray(state.installedApps) && state.installedApps.length) {
+    return state.installedApps;
+  }
+
+  const apps = await window.settingsApi.listInstalledApps();
+  state.installedApps = Array.isArray(apps) ? apps : [];
+  return state.installedApps;
 }
 
 function createWebDavDraft(webdav) {
@@ -744,15 +1013,15 @@ function reorderDraftProviders(draggedProviderId, targetProviderId, placement = 
     return;
   }
 
-  const providerIds = Array.isArray(state.drawer.draft.provider_ids) ? [...state.drawer.draft.provider_ids] : [];
-  const draggedIndex = providerIds.findIndex((providerId) => providerId === draggedProviderId);
+  const targets = [...getToolTranslationTargets(state.drawer.draft)];
+  const draggedIndex = targets.findIndex((target) => serializeTranslationTarget(target) === draggedProviderId);
 
   if (draggedIndex === -1 || draggedProviderId === targetProviderId) {
     return;
   }
 
-  const [draggedProviderIdValue] = providerIds.splice(draggedIndex, 1);
-  let insertIndex = providerIds.findIndex((providerId) => providerId === targetProviderId);
+  const [draggedTarget] = targets.splice(draggedIndex, 1);
+  let insertIndex = targets.findIndex((target) => serializeTranslationTarget(target) === targetProviderId);
 
   if (insertIndex === -1) {
     return;
@@ -762,9 +1031,9 @@ function reorderDraftProviders(draggedProviderId, targetProviderId, placement = 
     insertIndex += 1;
   }
 
-  providerIds.splice(insertIndex, 0, draggedProviderIdValue);
-  state.drawer.draft.provider_ids = providerIds;
-  state.drawer.draft.provider_id = providerIds[0] || '';
+  targets.splice(insertIndex, 0, draggedTarget);
+  state.drawer.draft.translation_targets = targets;
+  syncDraftLegacyProviderFields();
   renderDrawer();
 }
 
@@ -836,6 +1105,7 @@ function openToolDrawer(mode, tool = null) {
     draft: tool
       ? {
           ...deepClone(tool),
+          translation_targets: getToolTranslationTargets(tool),
           provider_ids:
             Array.isArray(tool.provider_ids) && tool.provider_ids.length
               ? [...tool.provider_ids]
@@ -857,10 +1127,13 @@ function openToolDrawer(mode, tool = null) {
           favicon: null,
           provider_id: '',
           provider_ids: [],
+          translation_targets: [],
           copy_before_action: false,
           prompt: ''
         }
   };
+
+  syncDraftLegacyProviderFields();
 
   renderDrawer();
 }
@@ -911,6 +1184,62 @@ function openProviderDrawer(mode, provider = null) {
   };
 
   renderDrawer();
+}
+
+function createTranslationServiceDraft(service = null) {
+  const fallback = DEFAULT_TRANSLATION_SERVICES.find((item) => item.id === service?.id) || service || {};
+
+  return {
+    id: service?.id || fallback.id || '',
+    name: service?.name || fallback.name || '',
+    driver: service?.driver || fallback.driver || '',
+    enabled: service?.enabled !== undefined ? service.enabled !== false : fallback.enabled !== false,
+    auth_mode: service?.auth_mode || fallback.auth_mode || 'web',
+    api_key: service?.api_key || fallback.api_key || '',
+    endpoint: service?.endpoint ?? fallback.endpoint ?? '',
+    region: service?.region ?? fallback.region ?? '',
+    api_variant: service?.api_variant || fallback.api_variant || ''
+  };
+}
+
+function openTranslationServiceDrawer(service = null) {
+  state.drawer = {
+    kind: 'service',
+    mode: 'edit',
+    draft: createTranslationServiceDraft(service),
+    ui: {
+      apiKeyVisible: false
+    }
+  };
+
+  renderDrawer();
+}
+
+function openCopyAppRuleDrawer(mode = 'create', rule = null, source = 'manual') {
+  const draft = createCopyAppRuleDraft(rule || { source });
+  state.drawer = {
+    kind: 'copy-rule',
+    mode,
+    draft,
+    ui: {
+      searchQuery: '',
+      selectedInstalledAppPath: normalizeExePath(rule?.exe_path || '')
+    }
+  };
+
+  renderDrawer();
+
+  if (draft.source === 'installed') {
+    void ensureInstalledAppsLoaded().then(() => {
+      if (state.drawer?.kind !== 'copy-rule') {
+        return;
+      }
+
+      renderDrawer();
+    }).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
+  }
 }
 
 async function closeDrawer() {
@@ -976,16 +1305,13 @@ function buildToolPayload(draft) {
     throw new Error('快捷键必须包含至少一个非修饰键。');
   }
 
-  const providerIds = Array.from(
-    new Set(
-      (Array.isArray(draft.provider_ids) ? draft.provider_ids : [])
-        .map((providerId) => String(providerId || '').trim())
-        .filter(Boolean)
-    )
-  );
+  const translationTargets = getToolTranslationTargets(draft);
+  const providerIds = translationTargets
+    .filter((target) => target.kind === 'provider')
+    .map((target) => target.id);
 
-  if (draft.type === 'ai' && !providerIds.length) {
-    throw new Error('AI 翻译工具至少需要选择一个提供商。');
+  if (draft.type === 'ai' && !translationTargets.length) {
+    throw new Error('AI 翻译工具至少需要选择一个翻译目标。');
   }
 
   const normalizedIconName = normalizeIconName(rawIconName) || TOOL_TYPE_DEFAULT_ICONS[draft.type] || '';
@@ -1008,6 +1334,7 @@ function buildToolPayload(draft) {
     favicon: draft.type === 'url' ? faviconMeta : undefined,
     provider_id: draft.type === 'ai' ? providerIds[0] || '' : undefined,
     provider_ids: draft.type === 'ai' ? providerIds : undefined,
+    translation_targets: draft.type === 'ai' ? translationTargets : undefined,
     prompt: draft.type === 'ai' ? String(draft.prompt || '') : undefined
   };
 }
@@ -1042,6 +1369,36 @@ function buildProviderPayload(draft) {
   return payload;
 }
 
+function buildTranslationServicePayload(draft) {
+  const payload = {
+    id: String(draft.id || '').trim(),
+    name: String(draft.name || '').trim(),
+    driver: String(draft.driver || '').trim(),
+    enabled: draft.enabled !== false,
+    api_key: String(draft.api_key || '').trim(),
+    region: String(draft.region || '').trim(),
+    endpoint: String(draft.endpoint || '').trim(),
+    api_variant: String(draft.api_variant || '').trim()
+  };
+
+  if (!payload.id || !payload.name || !payload.driver) {
+    throw new Error('免费翻译服务配置不完整。');
+  }
+
+  if (payload.id === 'bing-free') {
+    payload.driver = 'bing-api';
+    payload.auth_mode = 'api';
+    payload.api_variant = 'azure';
+    return payload;
+  }
+
+  payload.driver = 'google-web';
+  payload.auth_mode = payload.api_key ? 'api' : 'web';
+  payload.endpoint = payload.endpoint || 'https://translation.googleapis.com/language/translate/v2';
+  payload.api_variant = 'basic-v2';
+  return payload;
+}
+
 function buildSelectionPayload(draft) {
   const toolbarOffsetX = Number(draft.toolbar_offset_x);
   const toolbarOffsetY = Number(draft.toolbar_offset_y);
@@ -1051,6 +1408,7 @@ function buildSelectionPayload(draft) {
     auxiliary_hotkey: draft.auxiliary_hotkey || [],
     blacklist_exes: parseLineList(draft.blacklist_text),
     whitelist_exes: parseLineList(draft.whitelist_text),
+    copy_app_rules: getSelectionCopyAppRules(draft).map((rule) => buildCopyAppRulePayload(rule)),
     hard_disabled_categories: Array.isArray(draft.hard_disabled_categories)
       ? draft.hard_disabled_categories
       : [],
@@ -1279,6 +1637,22 @@ async function saveDrawer() {
       return;
     }
 
+    if (state.drawer.kind === 'service') {
+      const payload = buildTranslationServicePayload(state.drawer.draft);
+
+      const nextConfig = deepClone(state.config);
+      nextConfig.translation_services = (nextConfig.translation_services || []).map((service) =>
+        service.id === payload.id ? payload : service
+      );
+      await persistConfig(nextConfig, '免费翻译服务已保存。');
+      return;
+    }
+
+    if (state.drawer.kind === 'copy-rule') {
+      await saveCopyAppRuleFromDrawer();
+      return;
+    }
+
     const payload = buildProviderPayload(state.drawer.draft);
 
     if (!payload.name || !payload.base_url || !payload.api_key || !payload.model) {
@@ -1363,6 +1737,60 @@ async function deleteProvider(providerId) {
   const nextConfig = deepClone(state.config);
   nextConfig.ai_providers = nextConfig.ai_providers.filter((provider) => provider.id !== providerId);
   await persistConfig(nextConfig, '提供商已删除。');
+}
+
+async function toggleTranslationService(serviceId, enabled) {
+  const nextConfig = deepClone(state.config);
+  nextConfig.translation_services = (nextConfig.translation_services || []).map((service) =>
+    service.id === serviceId ? { ...service, enabled } : service
+  );
+  await persistConfig(nextConfig, enabled ? '免费翻译服务已启用。' : '免费翻译服务已隐藏。');
+}
+
+async function resetTranslationService(serviceId) {
+  const fallback = DEFAULT_TRANSLATION_SERVICES.find((service) => service.id === serviceId);
+
+  if (!fallback) {
+    throw new Error('未找到默认免费翻译服务。');
+  }
+
+  const nextConfig = deepClone(state.config);
+  nextConfig.translation_services = (nextConfig.translation_services || []).map((service) =>
+    service.id === serviceId ? deepClone(fallback) : service
+  );
+  await persistConfig(nextConfig, '免费翻译服务已恢复默认。');
+}
+
+async function saveCopyAppRuleFromDrawer() {
+  ensureSelectionDraft();
+  const payload = buildCopyAppRulePayload(state.drawer.draft);
+  const nextRules = getSelectionCopyAppRules(state.selectionDraft).filter((rule) => rule.id !== payload.id);
+  nextRules.push(payload);
+  state.selectionDraft.copy_app_rules = nextRules;
+  await persistSelectionDraft('兼容取词规则已保存。');
+  await closeDrawer();
+}
+
+async function deleteCopyAppRule(ruleId) {
+  ensureSelectionDraft();
+  state.selectionDraft.copy_app_rules = getSelectionCopyAppRules(state.selectionDraft).filter((rule) => rule.id !== ruleId);
+  await persistSelectionDraft('兼容取词规则已删除。');
+}
+
+async function toggleCopyAppRule(ruleId, enabled) {
+  ensureSelectionDraft();
+  state.selectionDraft.copy_app_rules = getSelectionCopyAppRules(state.selectionDraft).map((rule) =>
+    rule.id === ruleId ? { ...rule, enabled } : rule
+  );
+  await persistSelectionDraft(enabled ? '兼容取词规则已启用。' : '兼容取词规则已停用。');
+}
+
+async function changeCopyAppRuleMode(ruleId, mode) {
+  ensureSelectionDraft();
+  state.selectionDraft.copy_app_rules = getSelectionCopyAppRules(state.selectionDraft).map((rule) =>
+    rule.id === ruleId ? { ...rule, mode: normalizeCopyAppRuleMode(mode) } : rule
+  );
+  await persistSelectionDraft('兼容取词模式已更新。');
 }
 
 async function toggleToolEnabled(toolId, enabled) {
@@ -1488,12 +1916,8 @@ function renderToolRows() {
       ${state.config.tools
         .map(
           (tool) => {
-            const providerNames = (Array.isArray(tool.provider_ids) && tool.provider_ids.length
-              ? tool.provider_ids
-              : tool.provider_id
-                ? [tool.provider_id]
-                : [])
-              .map((providerId) => state.config.ai_providers.find((provider) => provider.id === providerId)?.name)
+            const targetNames = getToolTranslationTargets(tool)
+              .map((target) => getTranslationTargetMeta(target)?.name)
               .filter(Boolean);
 
             return `
@@ -1546,7 +1970,7 @@ function renderToolRows() {
                   }
                   ${
                     tool.type === 'ai'
-                      ? `<span>${escapeHtml(providerNames.join(' / ') || '未绑定提供商')}</span>`
+                      ? `<span>${escapeHtml(targetNames.join(' / ') || '未绑定翻译目标')}</span>`
                       : ''
                   }
                   ${tool.type === 'ai' && String(tool.prompt || '').trim() ? '<span>工具 Prompt</span>' : ''}
@@ -1574,38 +1998,81 @@ function renderToolRows() {
 }
 
 function renderProviderRows() {
-  if (!state.config?.ai_providers?.length) {
-    return '<div class="empty-state">还没有 AI 提供商，先添加一个用于 AI 翻译工具。</div>';
-  }
+  const providerRows = state.config?.ai_providers?.length
+    ? `
+      <div class="list-grid">
+        ${state.config.ai_providers
+          .map(
+            (provider) => `
+              <article class="list-row provider-row">
+                <div class="service-kind-badge kind-ai">AI</div>
+                <div class="list-main">
+                  <div class="list-title">${escapeHtml(provider.name)}</div>
+                  <div class="list-meta">
+                    <span class="tag">${escapeHtml(provider.model)}</span>
+                    <span class="tag subtle">${escapeHtml(PROXY_MODE_LABELS[provider.proxy?.mode || 'system'])}</span>
+                    <span class="provider-summary-url" title="${escapeHtml(provider.base_url)}">${escapeHtml(
+                      String(provider.base_url || '').replace(/^https?:\/\//u, '').replace(/\/.*$/u, '')
+                    )}</span>
+                  </div>
+                </div>
+                <div class="list-actions">
+                  <button class="inline-button" type="button" data-action="edit-provider" data-id="${provider.id}">编辑</button>
+                  <button class="inline-button" type="button" data-action="duplicate-provider" data-id="${provider.id}">复制</button>
+                  <button class="inline-button danger" type="button" data-action="delete-provider" data-id="${provider.id}">
+                    删除
+                  </button>
+                </div>
+              </article>
+            `
+          )
+          .join('')}
+      </div>
+    `
+    : '<div class="empty-state">还没有 AI 提供商，先添加一个用于 AI 翻译工具。</div>';
+
+  const serviceRows = state.config?.translation_services?.length
+    ? `
+      <div class="list-grid">
+        ${state.config.translation_services
+          .map(
+            (service) => `
+              <article class="list-row provider-row">
+                <div class="service-kind-badge kind-free">Free</div>
+                <div class="list-main">
+                  <div class="list-title">${escapeHtml(service.name)}</div>
+                  <div class="list-meta">
+                    <span class="tag">${escapeHtml(getTranslationServiceBadgeLabel(service))}</span>
+                    <span class="tag subtle">${escapeHtml(getTranslationServiceModeLabel(service))}</span>
+                    <span class="tag subtle">${escapeHtml(getTranslationServiceStatusLabel(service))}</span>
+                  </div>
+                </div>
+                <div class="list-actions">
+                  <label class="toggle">
+                    <input type="checkbox" data-action="toggle-service" data-id="${service.id}" ${service.enabled !== false ? 'checked' : ''} />
+                    <span class="toggle-track"></span>
+                  </label>
+                  <button class="inline-button" type="button" data-action="edit-service" data-id="${service.id}">编辑</button>
+                  <button class="inline-button" type="button" data-action="reset-service" data-id="${service.id}">恢复默认</button>
+                </div>
+              </article>
+            `
+          )
+          .join('')}
+      </div>
+    `
+    : '<div class="empty-state">当前没有可用的免费翻译服务。</div>';
 
   return `
-    <div class="list-grid">
-      ${state.config.ai_providers
-        .map(
-          (provider) => `
-            <article class="list-row provider-row">
-              <div class="list-icon tag">AI</div>
-              <div class="list-main">
-                <div class="list-title">${escapeHtml(provider.name)}</div>
-                <div class="list-meta">
-                  <span class="tag">${escapeHtml(provider.model)}</span>
-                  <span class="tag subtle">${escapeHtml(PROXY_MODE_LABELS[provider.proxy?.mode || 'system'])}</span>
-                  <span class="provider-summary-url" title="${escapeHtml(provider.base_url)}">${escapeHtml(
-                    String(provider.base_url || '').replace(/^https?:\/\//u, '').replace(/\/.*$/u, '')
-                  )}</span>
-                </div>
-              </div>
-              <div class="list-actions">
-                <button class="inline-button" type="button" data-action="edit-provider" data-id="${provider.id}">编辑</button>
-                <button class="inline-button" type="button" data-action="duplicate-provider" data-id="${provider.id}">复制</button>
-                <button class="inline-button danger" type="button" data-action="delete-provider" data-id="${provider.id}">
-                  删除
-                </button>
-              </div>
-            </article>
-          `
-        )
-        .join('')}
+    <div class="selection-grid">
+      <section class="selection-card">
+        <div class="selection-card-title">AI 提供商</div>
+        ${providerRows}
+      </section>
+      <section class="selection-card">
+        <div class="selection-card-title">免费翻译服务</div>
+        ${serviceRows}
+      </section>
     </div>
   `;
 }
@@ -1617,6 +2084,7 @@ function renderSelectionSettings() {
     auxiliary_hotkey: [],
     blacklist_text: '',
     whitelist_text: '',
+    copy_app_rules: [],
     hard_disabled_categories: [],
     toolbar_offset_x: 0,
     toolbar_offset_y: 0,
@@ -1687,6 +2155,56 @@ function renderSelectionSettings() {
             <span>保留原生 helper 诊断信息</span>
           </label>
         </div>
+      </section>
+
+      <section class="selection-card">
+        <div class="selection-card-title">兼容取词</div>
+        <div class="field-hint">默认所有软件都沿用当前划词方案；只有 PDF 阅读器等问题软件才单独配置强制或跳过 Ctrl+C。</div>
+        <div class="selection-inline">
+          <button class="inline-button" type="button" data-action="add-copy-rule-installed">从系统软件添加</button>
+          <button class="inline-button" type="button" data-action="add-copy-rule-manual">手动添加 EXE</button>
+        </div>
+        ${
+          getSelectionCopyAppRules(draft).length
+            ? `
+              <div class="list-grid">
+                ${getSelectionCopyAppRules(draft)
+                  .map(
+                    (rule) => `
+                      <article class="list-row compatibility-row">
+                        <div class="service-kind-badge kind-free">Rule</div>
+                        <div class="list-main">
+                          <div class="list-title">${escapeHtml(rule.label)}</div>
+                          <div class="list-meta">
+                            <span class="tag">${escapeHtml(getCopyAppRuleModeLabel(rule.mode))}</span>
+                            <span class="tag subtle">${escapeHtml(rule.source === 'installed' ? '系统软件' : '手动添加')}</span>
+                            <span>${escapeHtml(rule.process_name || '未知进程')}</span>
+                          </div>
+                          <div class="provider-summary-url">${escapeHtml(rule.exe_path || '')}</div>
+                        </div>
+                        <div class="list-actions">
+                          <label class="toggle">
+                            <input type="checkbox" data-action="toggle-copy-rule" data-id="${rule.id}" ${rule.enabled !== false ? 'checked' : ''} />
+                            <span class="toggle-track"></span>
+                          </label>
+                          <select class="inline-select" data-action="change-copy-rule-mode" data-id="${rule.id}">
+                            ${COPY_APP_RULE_MODE_OPTIONS
+                              .map(
+                                (option) => `<option value="${option.id}" ${rule.mode === option.id ? 'selected' : ''}>${option.label}</option>`
+                              )
+                              .join('')}
+                          </select>
+                          <button class="inline-button" type="button" data-action="edit-copy-rule" data-id="${rule.id}">编辑</button>
+                          <button class="inline-button danger" type="button" data-action="delete-copy-rule" data-id="${rule.id}">删除</button>
+                        </div>
+                      </article>
+                    `
+                  )
+                  .join('')}
+              </div>
+            `
+            : '<div class="empty-state">当前还没有兼容取词规则。</div>'
+        }
       </section>
 
       <section class="selection-card">
@@ -1862,8 +2380,14 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>Helper 状态</span><strong>${diagnostics.helperReady ? '就绪' : '未就绪'}</strong></div>
           <div class="diagnostics-row"><span>Helper PID</span><strong>${escapeHtml(diagnostics.helperPid || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近策略</span><strong>${escapeHtml(diagnostics.lastStrategy || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>最终策略</span><strong>${escapeHtml(diagnostics.finalSelectionStrategy || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近触发</span><strong>${escapeHtml(diagnostics.lastReason || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程</span><strong>${escapeHtml(diagnostics.processName || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>最近进程路径</span><strong>${escapeHtml(diagnostics.processPath || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>命中规则</span><strong>${escapeHtml(diagnostics.matchedCopyRule || '默认自动')}</strong></div>
+          <div class="diagnostics-row"><span>请求模式</span><strong>${escapeHtml(diagnostics.requestedCopyMode || 'auto')}</strong></div>
+          <div class="diagnostics-row"><span>实际模式</span><strong>${escapeHtml(diagnostics.effectiveCopyMode || 'auto')}</strong></div>
+          <div class="diagnostics-row"><span>最终来源</span><strong>${escapeHtml(diagnostics.finalTextSource || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近窗口类</span><strong>${escapeHtml(diagnostics.className || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>采样时间</span><strong>${escapeHtml(diagnostics.sampledAt || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>Electron 总计</span><strong>${escapeHtml(formatMemoryBucket(diagnostics.memory?.electron?.total))}</strong></div>
@@ -2039,8 +2563,8 @@ function renderContent() {
       subtitle: '保留现有 UI，核心切换为原生 helper 后的触发、规则和诊断。'
     },
     providers: {
-      title: 'AI 提供商',
-      subtitle: '配置接口地址、代理模式和高级 JSON 参数。'
+      title: '翻译服务',
+      subtitle: '统一管理 AI 提供商与内置免费翻译服务。'
     },
     webdav: {
       title: 'WebDAV 同步',
@@ -2278,22 +2802,25 @@ function renderToolDrawer() {
         draft.type === 'ai'
           ? `
             <div class="field">
-              <div class="field-label">AI 提供商</div>
+              <div class="field-label">翻译目标</div>
               ${
-                Array.isArray(draft.provider_ids) && draft.provider_ids.length
+                getToolTranslationTargets(draft).length
                   ? `
                     <div class="selected-provider-order-list">
-                      ${draft.provider_ids
-                        .map((providerId) => state.config.ai_providers.find((provider) => provider.id === providerId))
-                        .filter(Boolean)
+                      ${getToolTranslationTargets(draft)
+                        .map((target) => ({
+                          key: serializeTranslationTarget(target),
+                          meta: getTranslationTargetMeta(target)
+                        }))
+                        .filter((target) => target.meta)
                         .map(
-                          (provider) => `
-                            <div class="selected-provider-order-row" data-provider-order-row="true" data-provider-order-id="${provider.id}">
+                          ({ key, meta }) => `
+                            <div class="selected-provider-order-row" data-provider-order-row="true" data-provider-order-id="${key}">
                               <button
                                 class="drag-handle provider-order-handle"
                                 type="button"
                                 draggable="true"
-                                data-drag-provider-id="${provider.id}"
+                                data-drag-provider-id="${key}"
                                 aria-label="拖动排序"
                                 title="拖动排序"
                               >
@@ -2305,10 +2832,10 @@ function renderToolDrawer() {
                                 />
                               </button>
                               <div class="provider-order-main">
-                                <div class="provider-order-title">${escapeHtml(provider.name)}</div>
-                                <div class="provider-order-meta">${escapeHtml(provider.model)}</div>
+                                <div class="provider-order-title">${escapeHtml(meta.name)}</div>
+                                <div class="provider-order-meta">${escapeHtml(meta.kind === 'service' ? `免费服务 · ${meta.meta}` : `AI 提供商 · ${meta.meta}`)}</div>
                               </div>
-                              <button class="inline-button" type="button" data-action="remove-tool-provider" data-provider-id="${provider.id}">
+                              <button class="inline-button" type="button" data-action="remove-tool-provider" data-provider-id="${key}">
                                 移除
                               </button>
                             </div>
@@ -2316,27 +2843,33 @@ function renderToolDrawer() {
                         )
                         .join('')}
                     </div>
-                    <div class="field-hint">拖动已选提供商可以调整请求顺序和翻译标签页顺序。</div>
+                    <div class="field-hint">拖动已选目标可以调整请求顺序和翻译标签页顺序。</div>
                   `
-                  : '<div class="field-hint">当前还没有选中的提供商，勾选后会按选择顺序加入。</div>'
+                  : '<div class="field-hint">当前还没有选中的翻译目标，勾选后会按选择顺序加入。</div>'
               }
               <div class="provider-check-list compact-provider-list">
-                ${state.config.ai_providers
-                  .map((provider) => {
-                    const selected = draft.provider_ids?.includes(provider.id);
+                ${getVisibleToolTranslationTargets(draft)
+                  .map((target) => {
+                    const targetKey = serializeTranslationTarget(target);
+                    const selected = getToolTranslationTargets(draft)
+                      .some((item) => serializeTranslationTarget(item) === targetKey);
 
                     return `
                       <label class="provider-check-item ${selected ? 'selected' : ''}">
                         <input
                           type="checkbox"
                           data-action="toggle-tool-provider"
-                          data-provider-id="${provider.id}"
+                          data-provider-id="${targetKey}"
                           ${selected ? 'checked' : ''}
                         />
                         <span class="provider-check-main">
                           <span class="provider-check-title-row">
-                            <span class="provider-check-title">${escapeHtml(provider.name)}</span>
-                            <span class="provider-check-badge">${escapeHtml(provider.model)}</span>
+                            <span class="provider-check-title">${escapeHtml(target.name)}</span>
+                            <span class="provider-check-badge">${escapeHtml(
+                              target.kind === 'service'
+                                ? `${target.meta}${target.enabled !== false ? '' : ' · 已隐藏'}`
+                                : target.meta
+                            )}</span>
                           </span>
                         </span>
                       </label>
@@ -2345,15 +2878,15 @@ function renderToolDrawer() {
                   .join('')}
               </div>
               ${
-                state.config.ai_providers.length
+                getVisibleToolTranslationTargets(draft).length
                   ? ''
-                  : '<div class="field-hint">当前没有可用提供商，请先到 AI 提供商页添加。</div>'
+                  : '<div class="field-hint">当前没有可用翻译目标，请先到“翻译服务”页配置。</div>'
               }
             </div>
             <div class="field">
               <label class="field-label" for="tool-prompt">工具 Prompt</label>
               <textarea id="tool-prompt" data-field="prompt">${escapeHtml(draft.prompt || '')}</textarea>
-              <div class="field-hint">留空时继承所选提供商的默认 Prompt。</div>
+              <div class="field-hint">只对 AI 提供商生效；免费翻译服务会忽略这里的 Prompt。</div>
             </div>
           `
           : ''
@@ -2451,6 +2984,176 @@ function renderProviderDrawer() {
   `;
 }
 
+function renderTranslationServiceDrawer() {
+  const draft = state.drawer.draft;
+  const isApiKeyVisible = state.drawer?.ui?.apiKeyVisible === true;
+  const modeLabel = getTranslationServiceModeLabel(draft);
+  const isBing = draft.id === 'bing-free';
+  const modeHint = isBing
+    ? 'Bing 仅支持官方 API；启用后需要配置 Azure Translator 凭证。'
+    : 'Google 默认可直接走网页翻译；配置 API Key 后会优先走官方 API。';
+
+  return `
+    <div class="drawer-section">
+      <div class="field">
+        <label class="field-label" for="service-name">名称</label>
+        <input id="service-name" data-field="name" value="${escapeHtml(draft.name || '')}" />
+      </div>
+      <div class="field">
+        <div class="chip">${escapeHtml(modeLabel)}</div>
+        <div class="field-hint">${escapeHtml(modeHint)}</div>
+      </div>
+      <div class="field-inline">
+        <div class="field">
+          <label class="field-label" for="service-id">服务 ID</label>
+          <input id="service-id" value="${escapeHtml(draft.id || '')}" disabled />
+        </div>
+        <div class="field">
+          <label class="field-label" for="service-driver">驱动</label>
+          <input id="service-driver" value="${escapeHtml(draft.driver || '')}" disabled />
+        </div>
+      </div>
+      <label class="compact-toggle-row">
+        <span class="compact-toggle-text">在工具抽屉中显示该免费翻译服务</span>
+        <input type="checkbox" data-field="enabled" ${draft.enabled !== false ? 'checked' : ''} />
+      </label>
+      <div class="field">
+        <label class="field-label" for="service-api-key">API Key</label>
+        <div class="input-action-row">
+          <input
+            id="service-api-key"
+            class="field-input-grow"
+            data-field="api_key"
+            value="${escapeHtml(draft.api_key || '')}"
+            type="${isApiKeyVisible ? 'text' : 'password'}"
+          />
+          <button class="inline-button input-toggle-button" type="button" data-action="toggle-api-key-visibility">
+            ${isApiKeyVisible ? '隐藏' : '显示'}
+          </button>
+        </div>
+      </div>
+      ${
+        isBing
+          ? `
+            <div class="field-inline">
+              <div class="field">
+                <label class="field-label" for="service-region">Region</label>
+                <input id="service-region" data-field="region" value="${escapeHtml(draft.region || '')}" />
+                <div class="field-hint">全局资源可留空；区域/多服务资源通常必填。</div>
+              </div>
+              <div class="field">
+                <label class="field-label" for="service-endpoint">Endpoint</label>
+                <input id="service-endpoint" data-field="endpoint" value="${escapeHtml(draft.endpoint || '')}" />
+                <div class="field-hint">默认使用 Azure Translator 官方地址；自定义资源或代理入口时可覆盖。</div>
+              </div>
+            </div>
+          `
+          : ''
+      }
+      <div class="field-hint">
+        ${
+          isBing
+            ? '未配置 Key 时，Bing 不会回退网页翻译；请直接启用并填写 Azure Translator 配置。'
+            : 'Google 官方 API 配置失败时不会自动回退网页抓取；请直接检查 API Key。'
+        }
+      </div>
+    </div>
+  `;
+}
+
+function renderCopyAppRuleDrawer() {
+  const draft = state.drawer.draft;
+  const searchQuery = String(state.drawer?.ui?.searchQuery || '').trim().toLowerCase();
+  const installedApps = (state.installedApps || []).filter((app) => {
+    if (!searchQuery) {
+      return true;
+    }
+
+    const haystack = `${app.label} ${app.process_name} ${app.exe_path}`.toLowerCase();
+    return haystack.includes(searchQuery);
+  });
+  const isInstalledSource = draft.source === 'installed';
+
+  return `
+    <div class="drawer-section">
+      <div class="field">
+        <label class="field-label" for="copy-rule-label">显示名称</label>
+        <input id="copy-rule-label" data-field="label" value="${escapeHtml(draft.label || '')}" />
+      </div>
+      <div class="field-inline">
+        <div class="field">
+          <label class="field-label" for="copy-rule-mode">兼容模式</label>
+          <select id="copy-rule-mode" data-field="mode">
+            ${COPY_APP_RULE_MODE_OPTIONS
+              .map((option) => `<option value="${option.id}" ${draft.mode === option.id ? 'selected' : ''}>${option.label}</option>`)
+              .join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="copy-rule-source">规则来源</label>
+          <input id="copy-rule-source" value="${escapeHtml(draft.source === 'installed' ? '系统软件' : '手动添加')}" disabled />
+        </div>
+      </div>
+      <label class="compact-toggle-row">
+        <span class="compact-toggle-text">启用这条兼容规则</span>
+        <input type="checkbox" data-field="enabled" ${draft.enabled !== false ? 'checked' : ''} />
+      </label>
+      ${
+        isInstalledSource
+          ? `
+            <div class="field">
+              <label class="field-label" for="copy-rule-search">搜索系统软件</label>
+              <input id="copy-rule-search" data-field="search_query" value="${escapeHtml(state.drawer?.ui?.searchQuery || '')}" />
+              <div class="field-hint">按软件名、进程名或 exe 路径搜索。</div>
+            </div>
+            <div class="installed-app-list">
+              ${
+                installedApps.length
+                  ? installedApps
+                      .map((app) => `
+                        <button
+                          class="installed-app-option ${normalizeExePath(app.exe_path) === normalizeExePath(draft.exe_path) ? 'active' : ''}"
+                          type="button"
+                          data-action="choose-installed-app"
+                          data-exe-path="${escapeHtml(app.exe_path)}"
+                          data-process-name="${escapeHtml(app.process_name)}"
+                          data-label="${escapeHtml(app.label)}"
+                        >
+                          <span class="installed-app-title">${escapeHtml(app.label)}</span>
+                          <span class="installed-app-meta">${escapeHtml(app.process_name)}</span>
+                          <span class="installed-app-path">${escapeHtml(app.exe_path)}</span>
+                        </button>
+                      `)
+                      .join('')
+                  : '<div class="empty-state">没有匹配的软件项。</div>'
+              }
+            </div>
+          `
+          : `
+            <div class="field">
+              <label class="field-label" for="copy-rule-exe-path">EXE 路径</label>
+              <div class="input-action-row">
+                <input id="copy-rule-exe-path" data-field="exe_path" value="${escapeHtml(draft.exe_path || '')}" readonly />
+                <button class="inline-button input-toggle-button" type="button" data-action="pick-copy-rule-exe">选择 EXE</button>
+              </div>
+            </div>
+          `
+      }
+      <div class="field-inline">
+        <div class="field">
+          <label class="field-label" for="copy-rule-process-name">进程名</label>
+          <input id="copy-rule-process-name" data-field="process_name" value="${escapeHtml(draft.process_name || '')}" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="copy-rule-exe-path-readonly">命中路径</label>
+          <input id="copy-rule-exe-path-readonly" value="${escapeHtml(draft.exe_path || '')}" disabled />
+        </div>
+      </div>
+      <div class="field-hint">路径优先精确匹配；同名 exe 在不同目录下可以配置不同规则。</div>
+    </div>
+  `;
+}
+
 function getDrawerTitle() {
   if (!state.drawer) {
     return '';
@@ -2458,6 +3161,14 @@ function getDrawerTitle() {
 
   if (state.drawer.kind === 'tool') {
     return state.drawer.mode === 'edit' ? '编辑工具' : '添加工具';
+  }
+
+  if (state.drawer.kind === 'service') {
+    return '编辑免费翻译服务';
+  }
+
+  if (state.drawer.kind === 'copy-rule') {
+    return state.drawer.mode === 'edit' ? '编辑兼容取词规则' : '添加兼容取词规则';
   }
 
   if (state.drawer.mode === 'edit') {
@@ -2478,6 +3189,14 @@ function getDrawerSubtitle() {
 
   if (state.drawer.kind === 'tool') {
     return '保存后立即生效，下次划词会直接使用新配置。';
+  }
+
+  if (state.drawer.kind === 'service') {
+    return '可以调整显示名称和启用状态；恢复默认请在列表页操作。';
+  }
+
+  if (state.drawer.kind === 'copy-rule') {
+    return '只对问题软件单独配置；默认未命中的程序仍然沿用当前划词逻辑。';
   }
 
   if (state.drawer.mode === 'duplicate') {
@@ -2506,7 +3225,13 @@ function renderDrawer() {
       <button class="inline-button drawer-close-button" type="button" data-action="close-drawer">关闭</button>
     </div>
 
-    ${state.drawer.kind === 'tool' ? renderToolDrawer() : renderProviderDrawer()}
+    ${state.drawer.kind === 'tool'
+      ? renderToolDrawer()
+      : state.drawer.kind === 'service'
+        ? renderTranslationServiceDrawer()
+        : state.drawer.kind === 'copy-rule'
+          ? renderCopyAppRuleDrawer()
+          : renderProviderDrawer()}
 
     <div class="drawer-footer">
       <div>
@@ -2583,6 +3308,36 @@ elements.content.addEventListener('click', (event) => {
     openProviderDrawer('duplicate', state.config.ai_providers.find((provider) => provider.id === id));
   } else if (action === 'delete-provider') {
     void deleteProvider(id);
+  } else if (action === 'edit-service') {
+    openTranslationServiceDrawer(state.config.translation_services.find((service) => service.id === id));
+  } else if (action === 'reset-service') {
+    void resetTranslationService(id).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
+  } else if (action === 'add-copy-rule-installed') {
+    openCopyAppRuleDrawer('create', { mode: 'force_copy', source: 'installed' }, 'installed');
+  } else if (action === 'add-copy-rule-manual') {
+    void window.settingsApi.pickExePath().then((result) => {
+      if (!result?.exe_path) {
+        return;
+      }
+
+      openCopyAppRuleDrawer('create', {
+        label: result.label,
+        exe_path: result.exe_path,
+        process_name: result.process_name,
+        mode: 'force_copy',
+        source: 'manual'
+      }, 'manual');
+    }).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
+  } else if (action === 'edit-copy-rule') {
+    openCopyAppRuleDrawer('edit', getSelectionCopyAppRules().find((rule) => rule.id === id), 'manual');
+  } else if (action === 'delete-copy-rule') {
+    void deleteCopyAppRule(id).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
   } else if (action === 'record-selection-hotkey') {
     void startHotkeyRecording('selection');
   } else if (action === 'save-selection') {
@@ -2679,6 +3434,33 @@ elements.content.addEventListener('change', (event) => {
 
   if (toolToggle) {
     void toggleToolEnabled(toolToggle.dataset.id, toolToggle.checked);
+    return;
+  }
+
+  const serviceToggle = event.target.closest('[data-action="toggle-service"]');
+
+  if (serviceToggle) {
+    void toggleTranslationService(serviceToggle.dataset.id, serviceToggle.checked).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
+    return;
+  }
+
+  const copyRuleToggle = event.target.closest('[data-action="toggle-copy-rule"]');
+
+  if (copyRuleToggle) {
+    void toggleCopyAppRule(copyRuleToggle.dataset.id, copyRuleToggle.checked).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
+    return;
+  }
+
+  const copyRuleMode = event.target.closest('[data-action="change-copy-rule-mode"]');
+
+  if (copyRuleMode) {
+    void changeCopyAppRuleMode(copyRuleMode.dataset.id, copyRuleMode.value).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
     return;
   }
 
@@ -2804,6 +3586,7 @@ elements.drawer.addEventListener('click', (event) => {
     state.drawer.draft.copy_before_action = false;
     state.drawer.draft.provider_ids = [];
     state.drawer.draft.provider_id = '';
+    state.drawer.draft.translation_targets = [];
     state.drawer.draft.prompt = '';
     renderDrawer();
   } else if (action === 'record-hotkey') {
@@ -2811,17 +3594,36 @@ elements.drawer.addEventListener('click', (event) => {
   } else if (action === 'test-provider') {
     void testCurrentProvider();
   } else if (action === 'remove-tool-provider' && state.drawer?.kind === 'tool') {
-    state.drawer.draft.provider_ids = (state.drawer.draft.provider_ids || []).filter(
-      (providerId) => providerId !== actionElement.dataset.providerId
+    state.drawer.draft.translation_targets = getToolTranslationTargets(state.drawer.draft).filter(
+      (target) => serializeTranslationTarget(target) !== actionElement.dataset.providerId
     );
-    state.drawer.draft.provider_id = state.drawer.draft.provider_ids[0] || '';
+    syncDraftLegacyProviderFields();
     renderDrawer();
-  } else if (action === 'toggle-api-key-visibility' && state.drawer?.kind === 'provider') {
+  } else if (action === 'toggle-api-key-visibility' && (state.drawer?.kind === 'provider' || state.drawer?.kind === 'service')) {
     state.drawer.ui = {
       ...(state.drawer.ui || {}),
       apiKeyVisible: state.drawer.ui?.apiKeyVisible !== true
     };
     renderDrawer();
+  } else if (action === 'choose-installed-app' && state.drawer?.kind === 'copy-rule') {
+    state.drawer.draft.exe_path = normalizeExePath(actionElement.dataset.exePath || '');
+    state.drawer.draft.process_name = String(actionElement.dataset.processName || '').trim().toLowerCase();
+    state.drawer.draft.label = String(actionElement.dataset.label || '').trim() || state.drawer.draft.label;
+    state.drawer.draft.source = 'installed';
+    renderDrawer();
+  } else if (action === 'pick-copy-rule-exe' && state.drawer?.kind === 'copy-rule') {
+    void window.settingsApi.pickExePath().then((result) => {
+      if (!result?.exe_path || state.drawer?.kind !== 'copy-rule') {
+        return;
+      }
+
+      state.drawer.draft.exe_path = normalizeExePath(result.exe_path);
+      state.drawer.draft.process_name = String(result.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(result.exe_path);
+      state.drawer.draft.label = String(state.drawer.draft.label || '').trim() || String(result.label || '').trim() || state.drawer.draft.process_name;
+      renderDrawer();
+    }).catch((error) => {
+      setStatus(error.message || String(error), 'error', true);
+    });
   }
 });
 
@@ -2833,19 +3635,24 @@ elements.drawer.addEventListener('change', (event) => {
   }
 
   const nextProviderIds = new Set(
-    (Array.isArray(state.drawer.draft.provider_ids) ? state.drawer.draft.provider_ids : [])
-      .map((providerId) => String(providerId || '').trim())
-      .filter(Boolean)
+    getToolTranslationTargets(state.drawer.draft).map((target) => serializeTranslationTarget(target))
   );
+  const target = deserializeTranslationTarget(providerToggle.dataset.providerId);
 
-  if (providerToggle.checked) {
-    nextProviderIds.add(providerToggle.dataset.providerId);
-  } else {
-    nextProviderIds.delete(providerToggle.dataset.providerId);
+  if (!target) {
+    return;
   }
 
-  state.drawer.draft.provider_ids = Array.from(nextProviderIds);
-  state.drawer.draft.provider_id = state.drawer.draft.provider_ids[0] || '';
+  if (providerToggle.checked) {
+    nextProviderIds.add(serializeTranslationTarget(target));
+  } else {
+    nextProviderIds.delete(serializeTranslationTarget(target));
+  }
+
+  state.drawer.draft.translation_targets = Array.from(nextProviderIds)
+    .map((value) => deserializeTranslationTarget(value))
+    .filter(Boolean);
+  syncDraftLegacyProviderFields();
   renderDrawer();
 });
 
@@ -2920,6 +3727,16 @@ elements.drawer.addEventListener('input', (event) => {
 
   const { field } = fieldElement.dataset;
   const value = fieldElement.type === 'checkbox' ? fieldElement.checked : fieldElement.value;
+
+  if (state.drawer.kind === 'copy-rule' && field === 'search_query') {
+    state.drawer.ui = {
+      ...(state.drawer.ui || {}),
+      searchQuery: value
+    };
+    renderDrawer();
+    return;
+  }
+
   setDraftField(field, value);
 
   if (field === 'template' && state.drawer.kind === 'tool' && state.drawer.draft.type === 'url') {

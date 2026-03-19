@@ -41,7 +41,8 @@ function buildSelectionPayload(config = {}) {
     hard_disabled_categories: Array.isArray(selection.hard_disabled_categories)
       ? selection.hard_disabled_categories
       : [],
-    copy_fallback_enabled: selection.copy_fallback_enabled === true,
+    // Copy fallback is now coordinated in the main process so per-app rules can decide it.
+    copy_fallback_enabled: false,
     diagnostics_enabled: selection.diagnostics_enabled !== false,
     logging_enabled: config.logging?.enabled === true
   };

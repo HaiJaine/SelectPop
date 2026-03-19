@@ -19,6 +19,7 @@ import {
   getConfig,
   getEnabledTools,
   getProviderById,
+  getTranslationTargetByRef,
   getToolById,
   initConfigStore,
   resolveProviderProxy,
@@ -26,15 +27,19 @@ import {
 } from './config.js';
 import { APP_NAME } from './defaults.js';
 import { getForegroundWindow, waitForForegroundRecovery } from './foreground.js';
-import { normalizeHotkeyKeys } from './input-sender.js';
+import { normalizeHotkeyKeys, sendCopyShortcut, sendVsCodeCopyShortcut } from './input-sender.js';
+import { listInstalledApps } from './installed-apps.js';
 import { AppLogger } from './logger.js';
 import { syncLaunchOnBootRegistry } from './launch-on-boot.js';
 import { NativeClient } from './native-client.js';
 import { configurePortableAppPaths, createPortablePaths, ensurePortablePaths, resolveAssetPath } from './paths.js';
 import { PopupManager } from './popup.js';
+import { recoverSelectionForApp } from './selection-recovery.js';
+import { SelectionService } from './selection-service.js';
 import { normalizeHookPoint } from './selection-utils.js';
 import { SettingsWindowManager } from './settings-window.js';
 import { deepClone } from './utils.js';
+import { VsCodeSelectionRecoveryService } from './vscode-selection-recovery.js';
 
 app.disableHardwareAcceleration();
 
@@ -133,11 +138,17 @@ function createEmptyDiagnostics() {
     connected: false,
     helperReady: false,
     lastStrategy: '',
+    finalSelectionStrategy: '',
+    finalTextSource: '',
     lastReason: '',
     lastError: '',
     processName: '',
+    processPath: '',
     windowTitle: '',
     className: '',
+    matchedCopyRule: '',
+    requestedCopyMode: 'auto',
+    effectiveCopyMode: 'auto',
     selectionLength: 0,
     lastTriggerAt: 0,
     helperWorkingSetBytes: 0,
@@ -509,10 +520,10 @@ async function getAiWindowManager() {
       .then(([{ AiWindowManager }, currentTranslationCache, aiRuntime]) => {
         aiWindowManager = new AiWindowManager(
           getConfig,
-          getProviderById,
+          getTranslationTargetByRef,
           {
-            startAiTranslation: (provider, text, prompt, callbacks, signal) =>
-              aiRuntime.startAiTranslation(provider, text, prompt, callbacks, signal),
+            startTranslation: (target, text, prompt, callbacks, signal, options) =>
+              aiRuntime.startTranslation(target, text, prompt, callbacks, signal, options),
             logger: appLogger.child('ai'),
             saveBounds: (bounds) => persistUiBounds('aiWindowBounds', bounds),
             translationCache: currentTranslationCache,
@@ -711,6 +722,10 @@ function rememberMouseReleaseAnchor(point) {
   };
 }
 
+function hasRecentMouseAnchor() {
+  return Boolean(latestMouseReleaseAnchor && Date.now() - latestMouseReleaseAnchor.capturedAt <= 2000);
+}
+
 function resolvePopupAnchorPoint(fallbackPoint = null) {
   if (latestMouseReleaseAnchor && Date.now() - latestMouseReleaseAnchor.capturedAt <= 2000) {
     return {
@@ -800,6 +815,88 @@ async function showPopupForSelection({
   return true;
 }
 
+function createMatchedRuleLabel(rule) {
+  if (!rule) {
+    return '';
+  }
+
+  return `${rule.label || rule.process_name || '兼容规则'} · ${rule.mode}`;
+}
+
+async function resolveSelectionContext(diagnostics = {}) {
+  const foregroundWindow = await getForegroundWindow();
+  const processName = String(
+    foregroundWindow?.owner?.name
+      || diagnostics?.processName
+      || ''
+  ).trim().toLowerCase();
+  const processPath = String(foregroundWindow?.owner?.path || '').trim();
+
+  return {
+    processName,
+    processPath,
+    windowTitle: String(foregroundWindow?.title || diagnostics?.windowTitle || '').trim()
+  };
+}
+
+async function handleRecoveredSelection({
+  helperText = '',
+  diagnostics = {},
+  strategy = '',
+  mouse = null,
+  anchorRect = null
+} = {}) {
+  const selectionContext = await resolveSelectionContext(diagnostics);
+  const recovery = await recoverSelectionForApp({
+    helperText,
+    helperStrategy: strategy || diagnostics?.lastStrategy || '',
+    diagnostics,
+    processName: selectionContext.processName,
+    processPath: selectionContext.processPath,
+    hasRecentMouseAnchor: hasRecentMouseAnchor(),
+    selectionConfig: getConfig().selection,
+    selectionService,
+    vsCodeRecoveryService: vsCodeSelectionRecoveryService
+  });
+
+  const mergedDiagnostics = {
+    ...(diagnostics || {}),
+    processName: selectionContext.processName || diagnostics?.processName || '',
+    processPath: selectionContext.processPath || '',
+    windowTitle: selectionContext.windowTitle || diagnostics?.windowTitle || '',
+    matchedCopyRule: createMatchedRuleLabel(recovery.matchedRule),
+    requestedCopyMode: recovery.requestedMode,
+    effectiveCopyMode: recovery.effectiveMode,
+    finalSelectionStrategy: recovery.finalSelectionStrategy,
+    finalTextSource: recovery.finalTextSource,
+    selectionLength: recovery.text?.length || 0,
+    lastError: recovery.ok ? '' : recovery.error || diagnostics?.lastError || ''
+  };
+
+  await syncDiagnosticsSnapshot(mergedDiagnostics);
+
+  if (!recovery.ok || !recovery.text) {
+    appLogger.warn('selection', 'Selection recovery produced no usable text.', {
+      processName: mergedDiagnostics.processName,
+      processPath: mergedDiagnostics.processPath,
+      requestedCopyMode: recovery.requestedMode,
+      effectiveCopyMode: recovery.effectiveMode,
+      finalSelectionStrategy: recovery.finalSelectionStrategy,
+      error: recovery.error || diagnostics?.lastError || ''
+    });
+    return false;
+  }
+
+  return showPopupForSelection({
+    selectedText: recovery.text,
+    tools: getEnabledTools(),
+    diagnostics: mergedDiagnostics,
+    strategy: recovery.finalSelectionStrategy,
+    mouse,
+    anchorRect
+  });
+}
+
 function applyLaunchOnBoot(config) {
   return syncLaunchOnBootPreference(config);
 }
@@ -852,6 +949,17 @@ const settingsWindowManager = new SettingsWindowManager(getConfig, (bounds) => p
 const nativeClient = new NativeClient({
   appPid: process.pid,
   logger: appLogger.child('native-helper')
+});
+const selectionService = new SelectionService({
+  sendCopyShortcut,
+  logger: appLogger.child('selection-service')
+});
+const vsCodeSelectionRecoveryService = new VsCodeSelectionRecoveryService({
+  selectionService,
+  sendTerminalCopyShortcut: sendVsCodeCopyShortcut,
+  sendEditorCopyShortcut: sendCopyShortcut,
+  waitForForegroundRecovery,
+  logger: appLogger.child('vscode-selection')
 });
 
 process.on('uncaughtException', (error) => {
@@ -1114,6 +1222,7 @@ async function executeTool(payload) {
           text: selectedText,
           providerId: tool.provider_id,
           providerIds: Array.isArray(tool.provider_ids) ? tool.provider_ids : [],
+          translationTargets: Array.isArray(tool.translation_targets) ? tool.translation_targets : [],
           prompt: typeof tool.prompt === 'string' ? tool.prompt : '',
           anchorBounds: createAnchorBoundsFromPoint(anchorPoint) || popupBounds
         });
@@ -1238,6 +1347,30 @@ function registerIpc() {
   ipcMain.handle('settings:start-hotkey-record', async () => nativeClient.startHotkeyRecord());
   ipcMain.handle('settings:stop-hotkey-record', () => nativeClient.stopHotkeyRecord());
   ipcMain.handle('settings:get-diagnostics', async () => syncDiagnosticsSnapshot());
+  ipcMain.handle('settings:list-installed-apps', async () => listInstalledApps());
+  ipcMain.handle('settings:pick-exe-path', async (event) => {
+    const browserWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const result = await dialog.showOpenDialog(browserWindow, {
+      title: '选择程序 EXE',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Executable', extensions: ['exe'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePaths?.[0]) {
+      return null;
+    }
+
+    const exePath = String(result.filePaths[0] || '').trim();
+    const fileName = exePath.split(/[\\/]/u).pop() || '';
+
+    return {
+      exe_path: exePath,
+      process_name: fileName.toLowerCase(),
+      label: fileName.replace(/\.exe$/iu, '') || fileName
+    };
+  });
   ipcMain.handle('settings:list-icon-names', async () => (await getIconService()).listIconNames());
   ipcMain.handle('settings:resolve-icon', async (_event, iconName) => (await getIconService()).resolveIcon(iconName));
   ipcMain.handle('settings:download-icon', async (_event, iconName) => (await getIconService()).downloadIcon(iconName));
@@ -1258,6 +1391,7 @@ function registerIpc() {
       text: payload.text,
       providerId: payload.providerId,
       providerIds: payload.providerIds || [],
+      translationTargets: payload.translationTargets || [],
       prompt: payload.prompt || '',
       anchorBounds: payload.anchorBounds || null
     })
@@ -1294,7 +1428,7 @@ function registerIpc() {
 
       if (meta?.silent !== true && meta?.completed === true) {
         appLogger.info('ai-markdown', 'AI markdown rendered successfully.', {
-          providerId: meta?.providerId || '',
+          targetId: meta?.targetId || meta?.providerId || '',
           textLength: markdown.length
         });
       }
@@ -1302,7 +1436,7 @@ function registerIpc() {
       return html;
     } catch (error) {
       appLogger.error('ai-markdown', 'AI markdown render failed.', {
-        providerId: meta?.providerId || '',
+        targetId: meta?.targetId || meta?.providerId || '',
         textLength: markdown.length,
         message: error instanceof Error ? error.message : String(error)
       });
@@ -1385,13 +1519,12 @@ function startHookWorker() {
 function registerNativeEvents() {
   nativeClient.on('selection-found', async (payload = {}) => {
     try {
-      await showPopupForSelection({
-        selectedText: payload.text,
-        tools: getEnabledTools(),
+      await handleRecoveredSelection({
+        helperText: payload.text,
         diagnostics: payload.diagnostics || {},
         strategy: payload.strategy || payload.diagnostics?.lastStrategy || '',
         mouse: payload.mouse || { x: 0, y: 0 },
-        anchorRect: payload.anchorRect || null,
+        anchorRect: payload.anchorRect || null
       });
     } catch (error) {
       appLogger.error('popup', 'Failed to show popup from native helper.', error);
@@ -1409,7 +1542,15 @@ function registerNativeEvents() {
 
   nativeClient.on('selection-failed', (payload) => {
     appLogger.warn('selection', 'Selection read failed.', payload?.diagnostics || payload || {});
-    void syncDiagnosticsSnapshot(payload?.diagnostics || payload || {});
+    void handleRecoveredSelection({
+      helperText: '',
+      diagnostics: payload?.diagnostics || payload || {},
+      strategy: payload?.diagnostics?.lastStrategy || '',
+      mouse: null,
+      anchorRect: null
+    }).catch((error) => {
+      appLogger.error('selection', 'Selection recovery after helper failure failed.', error);
+    });
   });
 }
 

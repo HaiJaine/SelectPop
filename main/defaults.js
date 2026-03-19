@@ -1,5 +1,5 @@
 export const APP_NAME = 'SelectPop';
-export const CONFIG_VERSION = 14;
+export const CONFIG_VERSION = 18;
 export const BUILTIN_COPY_TOOL_ID = 'tool-copy';
 
 export const BUILTIN_ICON_IDS = [
@@ -18,6 +18,9 @@ export const SUPPORTED_PROXY_MODES = ['none', 'system', 'custom', 'inherit'];
 export const SUPPORTED_SELECTION_MODES = ['auto', 'ctrl', 'hotkey', 'disabled'];
 export const SUPPORTED_WEBDAV_SYNC_MODES = ['auto-bidirectional'];
 export const SUPPORTED_WEBDAV_CONFLICT_POLICIES = ['newer'];
+export const SUPPORTED_TRANSLATION_SERVICE_DRIVERS = ['bing-api', 'google-web'];
+export const SUPPORTED_TRANSLATION_SERVICE_AUTH_MODES = ['web', 'api'];
+export const SUPPORTED_TRANSLATION_SERVICE_API_VARIANTS = ['azure', 'basic-v2'];
 export const DEFAULT_WEBDAV_BACKUP_RETENTION = 5;
 export const HARD_DISABLED_CATEGORIES = [
   'games',
@@ -32,6 +35,31 @@ export const RESERVED_AI_REQUEST_FIELDS = new Set([
   'messages',
   'stream',
   'stream_options'
+]);
+
+export const DEFAULT_TRANSLATION_SERVICES = Object.freeze([
+  {
+    id: 'google-free',
+    name: 'Google 翻译',
+    driver: 'google-web',
+    enabled: true,
+    auth_mode: 'web',
+    api_key: '',
+    endpoint: 'https://translation.googleapis.com/language/translate/v2',
+    region: '',
+    api_variant: 'basic-v2'
+  },
+  {
+    id: 'bing-free',
+    name: 'Bing 翻译',
+    driver: 'bing-api',
+    enabled: false,
+    auth_mode: 'api',
+    api_key: '',
+    endpoint: 'https://api.cognitive.microsofttranslator.com',
+    region: '',
+    api_variant: 'azure'
+  }
 ]);
 
 export const AI_SYSTEM_PROMPT = `You are a translation assistant. Your only task is to translate the input into Simplified Chinese and output only the translation, with no explanation, no answers, and no extra content.
@@ -69,11 +97,13 @@ export const DEFAULT_CONFIG = Object.freeze({
     }
   ],
   ai_providers: [],
+  translation_services: DEFAULT_TRANSLATION_SERVICES,
   selection: {
     mode: 'auto',
     auxiliary_hotkey: [],
     blacklist_exes: [],
     whitelist_exes: [],
+    copy_app_rules: [],
     hard_disabled_categories: [...HARD_DISABLED_CATEGORIES],
     toolbar_offset: {
       x: 0,
