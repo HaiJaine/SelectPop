@@ -80,12 +80,14 @@ export class SelectionService {
     logger = console,
     execFileImpl = execFileAsync,
     readSelectedTextFromClipboardImpl = readSelectedTextFromClipboardDefault,
+    readClipboardTextAfterCopyImpl = null,
     resolvePowerShellAssetPathImpl = resolvePowerShellAssetPathDefault
   } = {}) {
     this.sendCopyShortcut = sendCopyShortcut;
     this.logger = logger;
     this.execFileImpl = execFileImpl;
     this.readSelectedTextFromClipboardImpl = readSelectedTextFromClipboardImpl;
+    this.readClipboardTextAfterCopyImpl = readClipboardTextAfterCopyImpl;
     this.resolvePowerShellAssetPathImpl = resolvePowerShellAssetPathImpl;
     this.readQueue = Promise.resolve('');
   }
@@ -192,10 +194,32 @@ export class SelectionService {
     emptyError = 'Clipboard fallback returned empty text.',
     clipboardReadOptions = {}
   } = {}) {
-    const text = await this.readSelectedTextFromClipboardImpl(
-      sendCopyShortcut || this.sendCopyShortcut,
-      clipboardReadOptions
-    );
+    let text = '';
+    const helperCopyKeys = this.#resolveHelperCopyKeys(sendCopyShortcut, clipboardReadOptions);
+
+    if (typeof this.readClipboardTextAfterCopyImpl === 'function' && helperCopyKeys) {
+      try {
+        const helperResult = await this.readClipboardTextAfterCopyImpl({
+          keys: helperCopyKeys,
+          timeoutMs: clipboardReadOptions.timeoutMs,
+          pollMs: clipboardReadOptions.pollMs
+        });
+        text = sanitizeSelectedText(helperResult?.text);
+      } catch (error) {
+        this.logger?.warn?.('Helper-backed clipboard read failed, falling back to JS clipboard polling.', {
+          message: error instanceof Error ? error.message : String(error),
+          strategy
+        });
+      }
+    }
+
+    if (!text) {
+      text = await this.readSelectedTextFromClipboardImpl(
+        sendCopyShortcut || this.sendCopyShortcut,
+        clipboardReadOptions
+      );
+    }
+
     return createSelectionReadResult({
       ok: Boolean(text),
       text: sanitizeSelectedText(text),
@@ -204,5 +228,21 @@ export class SelectionService {
       timedOut: false,
       error: text ? '' : emptyError
     });
+  }
+
+  #resolveHelperCopyKeys(sendCopyShortcut, clipboardReadOptions = {}) {
+    const explicitKeys = Array.isArray(clipboardReadOptions?.copyKeys)
+      ? clipboardReadOptions.copyKeys
+      : null;
+
+    if (explicitKeys?.length) {
+      return explicitKeys.map((key) => String(key || '').trim().toLowerCase()).filter(Boolean);
+    }
+
+    if (!sendCopyShortcut || sendCopyShortcut === this.sendCopyShortcut) {
+      return ['ctrl', 'c'];
+    }
+
+    return null;
   }
 }

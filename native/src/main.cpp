@@ -1005,6 +1005,12 @@ class NativeHelperApp {
   bool TryGetSelectionViaUIAutomation(SelectionResult* result, const POINT& point, HWND fallback_hwnd) const;
   bool TryGetSelectionViaLegacyAccessibility(SelectionResult* result, HWND fallback_hwnd) const;
   bool TryGetSelectionViaCopyFallback(SelectionResult* result) const;
+  std::optional<ClipboardTextSnapshot> ReadClipboardTextAfterHotkey(
+    const std::vector<std::string>& keys,
+    int timeout_ms,
+    int poll_ms,
+    std::string* error
+  ) const;
   std::optional<ClipboardTextSnapshot> ReadClipboardText() const;
   bool WriteClipboardText(const std::wstring& text) const;
   bool SendHotkey(const std::vector<std::string>& keys) const;
@@ -1261,6 +1267,25 @@ void NativeHelperApp::HandlePipeCommand(const std::string& line) {
   if (*type == "diagnostics_request") {
     const int request_id = GetJsonInt(line, "requestId").value_or(0);
     SendDiagnosticsSnapshot(request_id);
+    return;
+  }
+
+  if (*type == "clipboard_copy_read_request") {
+    const int request_id = GetJsonInt(line, "requestId").value_or(0);
+    const auto payload = GetJsonObject(line, "payload");
+    const auto keys = payload.has_value() ? GetJsonStringArray(*payload, "keys") : std::vector<std::string> {};
+    const int timeout_ms =
+      payload.has_value() ? GetJsonInt(*payload, "timeoutMs").value_or(kCopyFallbackTimeoutMs) : kCopyFallbackTimeoutMs;
+    const int poll_ms =
+      payload.has_value() ? GetJsonInt(*payload, "pollMs").value_or(kCopyFallbackPollMs) : kCopyFallbackPollMs;
+    std::string error;
+    const auto copied = ReadClipboardTextAfterHotkey(keys, timeout_ms, poll_ms, &error);
+    std::ostringstream response;
+    response << "{\"type\":\"clipboard_copy_read_result\",\"requestId\":" << request_id
+             << ",\"payload\":{\"status\":\"ok\",\"text\":"
+             << JsonQuoteWide(copied.has_value() ? copied->text() : L"")
+             << ",\"error\":" << JsonQuote(error) << "}}";
+    SendMessageJson(response.str());
     return;
   }
 
@@ -1743,12 +1768,16 @@ bool NativeHelperApp::IsForegroundEligible(const ForegroundInfo& foreground, std
       "teamviewer.exe",
       "anydesk.exe",
       "sunloginclient.exe",
-      "todesk.exe"
+      "todesk.exe",
+      "mstsc.exe",
+      "msrdc.exe"
     };
 
     if (std::find(remote_processes.begin(), remote_processes.end(), foreground.process_name) !=
         remote_processes.end()) {
-      *reason = "Remote control tool is disabled.";
+      *reason = foreground.process_name == "mstsc.exe" || foreground.process_name == "msrdc.exe"
+        ? "Microsoft Remote Desktop client is disabled."
+        : "Remote control tool is disabled.";
       return false;
     }
   }
@@ -1952,46 +1981,19 @@ bool NativeHelperApp::TryGetSelectionViaLegacyAccessibility(SelectionResult* res
 
 bool NativeHelperApp::TryGetSelectionViaCopyFallback(SelectionResult* result) const {
   const auto snapshot = ReadClipboardText();
-  const std::wstring probe =
-    L"__selectpop_probe__" + std::to_wstring(NowTick()) + L"_" + std::to_wstring(GetCurrentProcessId());
-
-  if (!WriteClipboardText(probe)) {
-    LogWarn("Copy fallback aborted because probe text could not be written to the clipboard.");
-    return false;
-  }
-
-  if (!SendKeyChord({VK_CONTROL, 'C'})) {
-    if (snapshot.has_value()) {
-      WriteClipboardText(snapshot->text());
-    }
-
-    LogWarn("Copy fallback aborted because Ctrl+C could not be sent.");
-    return false;
-  }
-  std::optional<ClipboardTextSnapshot> copied;
-
-  for (int waited = 0; waited < kCopyFallbackTimeoutMs; waited += kCopyFallbackPollMs) {
-    Sleep(kCopyFallbackPollMs);
-    const auto current = ReadClipboardText();
-
-    if (!current.has_value()) {
-      continue;
-    }
-
-    if (current->text() == probe) {
-      continue;
-    }
-
-    copied = current;
-    break;
-  }
+  std::string error;
+  const auto copied = ReadClipboardTextAfterHotkey({"ctrl", "c"}, kCopyFallbackTimeoutMs, kCopyFallbackPollMs, &error);
 
   if (snapshot.has_value()) {
     WriteClipboardText(snapshot->text());
   }
 
   if (!copied.has_value()) {
-    LogWarn("Copy fallback did not observe a new clipboard value after Ctrl+C.");
+    LogWarn(
+      error.empty()
+        ? "Copy fallback did not observe a new clipboard value after Ctrl+C."
+        : error
+    );
     return false;
   }
 
@@ -2005,6 +2007,47 @@ bool NativeHelperApp::TryGetSelectionViaCopyFallback(SelectionResult* result) co
   result->strategy = "copy-fallback";
   result->has_anchor_rect = false;
   return true;
+}
+
+std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardTextAfterHotkey(
+  const std::vector<std::string>& keys,
+  int timeout_ms,
+  int poll_ms,
+  std::string* error
+) const {
+  const std::vector<std::string> effective_keys =
+    keys.empty() ? std::vector<std::string> {"ctrl", "c"} : keys;
+  const int effective_timeout_ms = std::max(kCopyFallbackPollMs, timeout_ms);
+  const int effective_poll_ms = std::max(10, poll_ms);
+  const DWORD clipboard_sequence_before_copy = GetClipboardSequenceNumber();
+
+  if (!SendHotkey(effective_keys)) {
+    if (error != nullptr) {
+      *error = "Copy hotkey could not be sent.";
+    }
+    return std::nullopt;
+  }
+
+  for (int waited = 0; waited < effective_timeout_ms; waited += effective_poll_ms) {
+    Sleep(effective_poll_ms);
+
+    if (GetClipboardSequenceNumber() == clipboard_sequence_before_copy) {
+      continue;
+    }
+
+    const auto current = ReadClipboardText();
+
+    if (!current.has_value()) {
+      continue;
+    }
+
+    return current;
+  }
+
+  if (error != nullptr) {
+    *error = "Copy fallback did not observe a clipboard update after the copy hotkey.";
+  }
+  return std::nullopt;
 }
 
 std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardText() const {

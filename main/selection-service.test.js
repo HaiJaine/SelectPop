@@ -91,6 +91,74 @@ test('uses the injected copy shortcut for clipboard fallback', async () => {
   assert.deepEqual(sentShortcuts, ['vscode']);
 });
 
+test('prefers helper-backed clipboard reads when copy keys are available', async () => {
+  const helperCalls = [];
+  let fallbackCalls = 0;
+  const service = new SelectionService({
+    sendCopyShortcut: async () => {},
+    resolvePowerShellAssetPathImpl: async () => 'read-selection.ps1',
+    execFileImpl: async () => ({ stdout: '', stderr: '' }),
+    readClipboardTextAfterCopyImpl: async (payload) => {
+      helperCalls.push(payload);
+      return {
+        text: 'helper clipboard'
+      };
+    },
+    readSelectedTextFromClipboardImpl: async () => {
+      fallbackCalls += 1;
+      return 'fallback';
+    },
+    logger: null
+  });
+
+  const result = await service.readClipboardSelection({
+    strategy: 'vscode-terminal-copy-recovery',
+    clipboardReadOptions: {
+      copyKeys: ['ctrl', 'shift', 'c'],
+      timeoutMs: 600,
+      pollMs: 40
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'helper clipboard');
+  assert.equal(result.strategy, 'vscode-terminal-copy-recovery');
+  assert.deepEqual(helperCalls, [{
+    keys: ['ctrl', 'shift', 'c'],
+    timeoutMs: 600,
+    pollMs: 40
+  }]);
+  assert.equal(fallbackCalls, 0);
+});
+
+test('falls back to JS clipboard polling when helper-backed copy read fails', async () => {
+  let fallbackCalls = 0;
+  const service = new SelectionService({
+    sendCopyShortcut: async () => {},
+    resolvePowerShellAssetPathImpl: async () => 'read-selection.ps1',
+    execFileImpl: async () => ({ stdout: '', stderr: '' }),
+    readClipboardTextAfterCopyImpl: async () => {
+      throw new Error('helper unavailable');
+    },
+    readSelectedTextFromClipboardImpl: async () => {
+      fallbackCalls += 1;
+      return 'fallback clipboard';
+    },
+    logger: null
+  });
+
+  const result = await service.readClipboardSelection({
+    strategy: 'clipboard-fallback',
+    clipboardReadOptions: {
+      copyKeys: ['ctrl', 'c']
+    }
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'fallback clipboard');
+  assert.equal(fallbackCalls, 1);
+});
+
 test('reports script timeout as structured result', async () => {
   const service = new SelectionService({
     sendCopyShortcut: async () => {},

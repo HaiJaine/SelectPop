@@ -139,6 +139,24 @@ export class NativeClient extends EventEmitter {
     return this.#request('diagnostics_request');
   }
 
+  async readClipboardTextAfterCopy({
+    keys = ['ctrl', 'c'],
+    timeoutMs,
+    pollMs
+  } = {}) {
+    await this.start(this.cachedConfig);
+    this.logger.info?.('Requesting clipboard text after copy hotkey.', {
+      keys: sanitizeKeys(keys),
+      timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : null,
+      pollMs: Number.isFinite(Number(pollMs)) ? Number(pollMs) : null
+    });
+    return this.#request('clipboard_copy_read_request', {
+      keys: sanitizeKeys(keys),
+      timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
+      pollMs: Number.isFinite(Number(pollMs)) ? Number(pollMs) : undefined
+    });
+  }
+
   getProcessInfo() {
     return {
       pid: this.child?.pid || 0,
@@ -282,7 +300,12 @@ export class NativeClient extends EventEmitter {
     if (requestId && this.pendingRequests.has(requestId)) {
       const entry = this.pendingRequests.get(requestId);
 
-      if (type === 'hotkey_record_finish' || type === 'hotkey_send_result' || type === 'diagnostic_snapshot') {
+      if (
+        type === 'hotkey_record_finish'
+        || type === 'hotkey_send_result'
+        || type === 'diagnostic_snapshot'
+        || type === 'clipboard_copy_read_result'
+      ) {
         this.pendingRequests.delete(requestId);
 
         if (payload?.status === 'error') {

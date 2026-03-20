@@ -36,6 +36,7 @@ import { NativeClient } from './native-client.js';
 import { configurePortableAppPaths, createPortablePaths, ensurePortablePaths, resolveAssetPath } from './paths.js';
 import { PopupManager } from './popup.js';
 import { recoverSelectionForApp } from './selection-recovery.js';
+import { buildSelectionPopupFingerprint, createSelectionPopupController } from './selection-popup-controller.js';
 import { SelectionService } from './selection-service.js';
 import { normalizeHookPoint } from './selection-utils.js';
 import { SettingsWindowManager } from './settings-window.js';
@@ -75,6 +76,7 @@ const MARKDOWN_RENDERER_IDLE_MS = 30_000;
 const STARTUP_IDLE_SAMPLE_DELAY_MS = 20_000;
 const AI_WARM_IDLE_MS = 5 * 60_000;
 const STARTUP_LOG_FILE_NAME = 'startup.log';
+const SELECTION_POPUP_DEDUPE_WINDOW_MS = 900;
 
 const portablePaths = createPortablePaths();
 ensurePortablePaths(portablePaths);
@@ -756,9 +758,11 @@ async function showPopupForSelection({
   diagnostics = {},
   strategy = '',
   mouse = null,
-  anchorRect = null
+  anchorRect = null,
+  flowId = 0,
+  fingerprint = ''
 } = {}) {
-  if (!globalEnabled) {
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
     return false;
   }
 
@@ -797,16 +801,36 @@ async function showPopupForSelection({
           point: captureLiveCursorDip(helperMouseDip) || helperMouseDip || { x: 0, y: 0 },
           source: 'live-cursor-dip'
         };
+  const decoratedTools = await decorateToolsForUi(tools);
+
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    return false;
+  }
+
+  if (!selectionPopupController.shouldShow({ flowId, fingerprint })) {
+    appLogger.info('popup', 'Popup request deduplicated or superseded.', {
+      fingerprint,
+      strategy: strategy || diagnostics?.lastStrategy || ''
+    });
+    return false;
+  }
 
   await popupManager.show({
     selectedText,
-    tools: await decorateToolsForUi(tools),
+    tools: decoratedTools,
     mouse,
     anchorPoint: popupAnchor.point,
     anchorSource: popupAnchor.source,
     anchorRect,
     strategy
   });
+
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    popupManager.hide();
+    return false;
+  }
+
+  selectionPopupController.markShown(fingerprint);
   const popupContext = popupManager.getContext?.() || {};
   appLogger.info('popup', 'Popup shown for selected text.', {
     toolCount: tools.length,
@@ -852,9 +876,19 @@ async function handleRecoveredSelection({
   diagnostics = {},
   strategy = '',
   mouse = null,
-  anchorRect = null
+  anchorRect = null,
+  flowId = 0
 } = {}) {
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    return false;
+  }
+
   const selectionContext = await resolveSelectionContext(diagnostics);
+
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    return false;
+  }
+
   const recovery = await recoverSelectionForApp({
     helperText,
     helperStrategy: strategy || diagnostics?.lastStrategy || '',
@@ -866,6 +900,10 @@ async function handleRecoveredSelection({
     selectionService,
     vsCodeRecoveryService: vsCodeSelectionRecoveryService
   });
+
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    return false;
+  }
 
   const mergedDiagnostics = {
     ...(diagnostics || {}),
@@ -883,6 +921,10 @@ async function handleRecoveredSelection({
 
   await syncDiagnosticsSnapshot(mergedDiagnostics);
 
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    return false;
+  }
+
   if (!recovery.ok || !recovery.text) {
     appLogger.warn('selection', 'Selection recovery produced no usable text.', {
       processName: mergedDiagnostics.processName,
@@ -895,13 +937,22 @@ async function handleRecoveredSelection({
     return false;
   }
 
+  const fingerprint = buildSelectionPopupFingerprint({
+    diagnostics: mergedDiagnostics,
+    selectedText: recovery.text,
+    processName: selectionContext.processName,
+    processPath: selectionContext.processPath
+  });
+
   return showPopupForSelection({
     selectedText: recovery.text,
     tools: getEnabledTools(),
     diagnostics: mergedDiagnostics,
     strategy: recovery.finalSelectionStrategy,
     mouse,
-    anchorRect
+    anchorRect,
+    flowId,
+    fingerprint
   });
 }
 
@@ -958,8 +1009,17 @@ const nativeClient = new NativeClient({
   appPid: process.pid,
   logger: appLogger.child('native-helper')
 });
+const selectionPopupController = createSelectionPopupController({
+  dedupeWindowMs: SELECTION_POPUP_DEDUPE_WINDOW_MS
+});
 const selectionService = new SelectionService({
   sendCopyShortcut,
+  readClipboardTextAfterCopyImpl: ({ keys, timeoutMs, pollMs }) =>
+    nativeClient.readClipboardTextAfterCopy({
+      keys,
+      timeoutMs,
+      pollMs
+    }),
   logger: appLogger.child('selection-service')
 });
 const vsCodeSelectionRecoveryService = new VsCodeSelectionRecoveryService({
@@ -980,6 +1040,7 @@ const helperRuntime = createHelperRuntimeController({
     refreshTrayMenu();
   },
   onDisable: async () => {
+    selectionPopupController.invalidate();
     popupManager.hide();
   },
   onEnableFailure: async (error) => {
@@ -1547,13 +1608,15 @@ function startHookWorker() {
 
 function registerNativeEvents() {
   nativeClient.on('selection-found', async (payload = {}) => {
+    const flowId = selectionPopupController.beginFlow();
     try {
       await handleRecoveredSelection({
         helperText: payload.text,
         diagnostics: payload.diagnostics || {},
         strategy: payload.strategy || payload.diagnostics?.lastStrategy || '',
         mouse: payload.mouse || { x: 0, y: 0 },
-        anchorRect: payload.anchorRect || null
+        anchorRect: payload.anchorRect || null,
+        flowId
       });
     } catch (error) {
       appLogger.error('popup', 'Failed to show popup from native helper.', error);
@@ -1566,6 +1629,9 @@ function registerNativeEvents() {
   });
 
   nativeClient.on('diagnostics', (payload) => {
+    if (payload?.connected === false) {
+      selectionPopupController.invalidate();
+    }
     void helperRuntime.handleHelperDiagnostics(payload);
     if (payload?.connected === false && !globalEnabled) {
       return;
@@ -1574,13 +1640,15 @@ function registerNativeEvents() {
   });
 
   nativeClient.on('selection-failed', (payload) => {
+    const flowId = selectionPopupController.beginFlow();
     appLogger.warn('selection', 'Selection read failed.', payload?.diagnostics || payload || {});
     void handleRecoveredSelection({
       helperText: '',
       diagnostics: payload?.diagnostics || payload || {},
       strategy: payload?.diagnostics?.lastStrategy || '',
       mouse: null,
-      anchorRect: null
+      anchorRect: null,
+      flowId
     }).catch((error) => {
       appLogger.error('selection', 'Selection recovery after helper failure failed.', error);
     });

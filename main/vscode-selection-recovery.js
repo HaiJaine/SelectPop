@@ -126,6 +126,7 @@ export class VsCodeSelectionRecoveryService {
         step: 'terminal-copy',
         strategy: 'vscode-terminal-copy-recovery',
         sendCopyShortcut: this.sendTerminalCopyShortcut,
+        copyKeys: ['ctrl', 'shift', 'c'],
         focusKind: scriptResult.focusKind,
         emptyError: 'VS Code Ctrl+Shift+C did not produce clipboard text.'
       });
@@ -134,6 +135,7 @@ export class VsCodeSelectionRecoveryService {
         step: 'editor-copy',
         strategy: 'vscode-editor-copy-recovery',
         sendCopyShortcut: this.sendEditorCopyShortcut,
+        copyKeys: ['ctrl', 'c'],
         focusKind: 'editor',
         emptyError: 'VS Code Ctrl+C did not produce clipboard text.'
       });
@@ -142,6 +144,7 @@ export class VsCodeSelectionRecoveryService {
         step: 'terminal-copy',
         strategy: 'vscode-terminal-copy-recovery',
         sendCopyShortcut: this.sendTerminalCopyShortcut,
+        copyKeys: ['ctrl', 'shift', 'c'],
         focusKind: scriptResult.focusKind,
         emptyError: 'VS Code Ctrl+Shift+C did not produce clipboard text.'
       });
@@ -149,6 +152,7 @@ export class VsCodeSelectionRecoveryService {
         step: 'editor-copy',
         strategy: 'vscode-editor-copy-recovery',
         sendCopyShortcut: this.sendEditorCopyShortcut,
+        copyKeys: ['ctrl', 'c'],
         focusKind: 'editor',
         emptyError: 'VS Code Ctrl+C did not produce clipboard text.'
       });
@@ -160,7 +164,10 @@ export class VsCodeSelectionRecoveryService {
         strategy: copyAttempt.strategy,
         focusKind: copyAttempt.focusKind,
         emptyError: copyAttempt.emptyError,
-        clipboardReadOptions
+        clipboardReadOptions: {
+          ...clipboardReadOptions,
+          copyKeys: copyAttempt.copyKeys
+        }
       });
       attempts.push({
         step: copyAttempt.step,

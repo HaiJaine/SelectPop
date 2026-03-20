@@ -104,3 +104,53 @@ test('updateConfig sends config_update to an already connected helper', async ()
 
   await client.dispose();
 });
+
+test('readClipboardTextAfterCopy sends helper request and resolves the clipboard text', async () => {
+  const harness = createSpawnHarness();
+  const client = new NativeClient({
+    appPid: 100,
+    logger: createLoggerStub(),
+    helperPath: 'C:\\helper\\selectpop-native-helper.exe',
+    spawnImpl: harness.spawnImpl,
+    existsSyncImpl: () => true
+  });
+
+  await client.start({
+    selection: {
+      mode: 'auto'
+    }
+  });
+
+  const pending = client.readClipboardTextAfterCopy({
+    keys: ['ctrl', 'shift', 'c'],
+    timeoutMs: 600,
+    pollMs: 40
+  });
+  for (let attempt = 0; attempt < 10 && harness.getMessages().at(-1)?.type !== 'clipboard_copy_read_request'; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const { child } = harness.getChildren()[0];
+  const requestMessage = harness.getMessages().at(-1);
+  child.stdout.write(`${JSON.stringify({
+    type: 'clipboard_copy_read_result',
+    requestId: requestMessage?.requestId || 1,
+    payload: {
+      status: 'ok',
+      text: 'copied text',
+      error: ''
+    }
+  })}\n`);
+
+  const result = await pending;
+  const messages = harness.getMessages();
+
+  assert.equal(messages.at(-1).type, 'clipboard_copy_read_request');
+  assert.deepEqual(messages.at(-1).payload, {
+    keys: ['ctrl', 'shift', 'c'],
+    timeoutMs: 600,
+    pollMs: 40
+  });
+  assert.equal(result.text, 'copied text');
+
+  await client.dispose();
+});

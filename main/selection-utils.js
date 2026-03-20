@@ -1,6 +1,8 @@
-import { clipboard, screen } from 'electron';
+import electron from 'electron';
 import { captureClipboardState, restoreClipboardState } from './clipboard.js';
 import { sleep } from './utils.js';
+
+const { clipboard, screen } = electron;
 
 export const SELECTION_ACTION_THRESHOLD_MS = 380;
 export const SELECTION_DRAG_THRESHOLD_PX = 6;
@@ -29,12 +31,15 @@ export function distanceBetweenPoints(a, b) {
 }
 
 export async function readSelectedTextFromClipboard(sendCopyShortcut, options = {}) {
-  const snapshot = captureClipboardState();
-  const probe = `__selectpop_probe__${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  const clipboardImpl = options?.clipboardImpl || clipboard;
+  const captureClipboardStateImpl = options?.captureClipboardStateImpl || captureClipboardState;
+  const restoreClipboardStateImpl = options?.restoreClipboardStateImpl || restoreClipboardState;
+  const sleepImpl = options?.sleepImpl || sleep;
+  const snapshot = captureClipboardStateImpl(clipboardImpl);
+  const originalText = String(snapshot?.text || '');
 
   try {
-    clipboard.writeText(probe);
-    await sleep(30);
+    await sleepImpl(30);
     if (typeof options?.beforeSendCopyShortcut === 'function') {
       await options.beforeSendCopyShortcut();
     }
@@ -46,17 +51,17 @@ export async function readSelectedTextFromClipboard(sendCopyShortcut, options = 
     const startedAt = Date.now();
 
     while (Date.now() - startedAt < SELECTION_PROBE_TIMEOUT_MS) {
-      const currentText = clipboard.readText();
+      const currentText = clipboardImpl.readText();
 
-      if (currentText && currentText !== probe) {
+      if (currentText && currentText !== originalText) {
         return currentText.trim();
       }
 
-      await sleep(25);
+      await sleepImpl(25);
     }
 
     return '';
   } finally {
-    restoreClipboardState(snapshot);
+    restoreClipboardStateImpl(snapshot, clipboardImpl);
   }
 }
