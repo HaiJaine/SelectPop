@@ -2,9 +2,18 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { resolveNativeHelperPath } from './paths.js';
+import electron from 'electron';
 
 const REQUIRED_HELPER_FILES = ['libwinpthread-1.dll'];
+const { app } = electron;
+
+function resolveNativeHelperPath() {
+  if (app?.isPackaged) {
+    return path.join(process.resourcesPath, 'native', 'selectpop-native-helper.exe');
+  }
+
+  return path.join(app?.getAppPath?.() || process.cwd(), 'native', 'bin', 'selectpop-native-helper.exe');
+}
 
 function sanitizeKeys(keys) {
   return Array.isArray(keys)
@@ -49,11 +58,19 @@ function buildSelectionPayload(config = {}) {
 }
 
 export class NativeClient extends EventEmitter {
-  constructor({ appPid, logger = console }) {
+  constructor({
+    appPid,
+    logger = console,
+    helperPath = resolveNativeHelperPath(),
+    spawnImpl = spawn,
+    existsSyncImpl = fs.existsSync
+  }) {
     super();
     this.appPid = appPid;
     this.logger = logger;
-    this.helperPath = resolveNativeHelperPath();
+    this.helperPath = helperPath;
+    this.spawnImpl = spawnImpl;
+    this.existsSyncImpl = existsSyncImpl;
     this.child = null;
     this.startPromise = null;
     this.messageBuffer = '';
@@ -65,7 +82,7 @@ export class NativeClient extends EventEmitter {
 
   async start(config) {
     if (config) {
-      this.cachedConfig = config;
+      this.setCachedConfig(config);
     }
 
     if (this.startPromise) {
@@ -80,13 +97,18 @@ export class NativeClient extends EventEmitter {
   }
 
   async updateConfig(config) {
-    this.cachedConfig = config;
+    this.setCachedConfig(config);
     await this.start(config);
     this.logger.info?.('Sending config update to native helper.', buildSelectionPayload(config));
     this.#sendMessage({
       type: 'config_update',
       payload: buildSelectionPayload(config)
     });
+  }
+
+  setCachedConfig(config) {
+    this.cachedConfig = config;
+    return this.cachedConfig;
   }
 
   async startHotkeyRecord() {
@@ -142,14 +164,14 @@ export class NativeClient extends EventEmitter {
   }
 
   async #startInternal() {
-    if (!fs.existsSync(this.helperPath)) {
+    if (!this.existsSyncImpl(this.helperPath)) {
       throw new Error(`Native helper not found: ${this.helperPath}`);
     }
 
     for (const fileName of REQUIRED_HELPER_FILES) {
       const requiredPath = path.join(path.dirname(this.helperPath), fileName);
 
-      if (!fs.existsSync(requiredPath)) {
+      if (!this.existsSyncImpl(requiredPath)) {
         throw new Error(`Native helper runtime dependency not found: ${requiredPath}`);
       }
     }
@@ -171,7 +193,7 @@ export class NativeClient extends EventEmitter {
     }
 
     await new Promise((resolve, reject) => {
-      this.child = spawn(this.helperPath, [`--app-pid=${this.appPid}`], {
+      this.child = this.spawnImpl(this.helperPath, [`--app-pid=${this.appPid}`], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe']
       });

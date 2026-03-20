@@ -27,6 +27,7 @@ import {
 } from './config.js';
 import { APP_NAME } from './defaults.js';
 import { getForegroundWindow, waitForForegroundRecovery } from './foreground.js';
+import { createDisconnectedDiagnostics, createHelperRuntimeController } from './helper-runtime-controller.js';
 import { normalizeHotkeyKeys, sendCopyShortcut, sendVsCodeCopyShortcut } from './input-sender.js';
 import { listInstalledApps } from './installed-apps.js';
 import { AppLogger } from './logger.js';
@@ -154,6 +155,13 @@ function createEmptyDiagnostics() {
     helperWorkingSetBytes: 0,
     helperPrivateBytes: 0
   };
+}
+
+function createHelperDisconnectedDiagnostics(baseDiagnostics = null) {
+  return createDisconnectedDiagnostics({
+    baseDiagnostics,
+    createEmptyDiagnostics
+  });
 }
 
 function kbToBytes(value) {
@@ -961,6 +969,31 @@ const vsCodeSelectionRecoveryService = new VsCodeSelectionRecoveryService({
   waitForForegroundRecovery,
   logger: appLogger.child('vscode-selection')
 });
+const helperRuntime = createHelperRuntimeController({
+  nativeClient,
+  getConfig,
+  createDisconnectedState: (baseDiagnostics = null) => createHelperDisconnectedDiagnostics(baseDiagnostics),
+  syncDiagnostics: (baseDiagnostics = null) => syncDiagnosticsSnapshot(baseDiagnostics),
+  syncHotkeyRecordState: (payload) => settingsWindowManager.syncHotkeyRecordState(payload),
+  onRuntimeStateChanged: (state) => {
+    globalEnabled = state.globalEnabled;
+    refreshTrayMenu();
+  },
+  onDisable: async () => {
+    popupManager.hide();
+  },
+  onEnableFailure: async (error) => {
+    appLogger.error('native-helper', 'Native helper failed while enabling from tray.', error);
+    dialog.showErrorBox(
+      'SelectPop 启用失败',
+      [
+        '原生 helper 启动失败，已回退为禁用状态。',
+        '',
+        error instanceof Error ? error.message : String(error)
+      ].join('\n')
+    );
+  }
+});
 
 process.on('uncaughtException', (error) => {
   appLogger.error('process', 'Uncaught exception.', error);
@@ -1021,7 +1054,7 @@ async function commitConfig(
   aiWindowManager?.syncUiConfig(config);
 
   if (refreshRuntime) {
-    await nativeClient.updateConfig(config);
+    await helperRuntime.syncConfig(config);
   }
 
   if (updateStartup) {
@@ -1059,11 +1092,7 @@ function refreshTrayMenu(config = getConfig()) {
       type: 'checkbox',
       checked: globalEnabled,
       click: (menuItem) => {
-        globalEnabled = menuItem.checked;
-        if (!globalEnabled) {
-          popupManager.hide();
-        }
-        refreshTrayMenu(config);
+        void helperRuntime.setGlobalEnabled(menuItem.checked === true);
       }
     },
     {
@@ -1344,9 +1373,9 @@ function registerIpc() {
       preferredConfig
     });
   });
-  ipcMain.handle('settings:start-hotkey-record', async () => nativeClient.startHotkeyRecord());
-  ipcMain.handle('settings:stop-hotkey-record', () => nativeClient.stopHotkeyRecord());
-  ipcMain.handle('settings:get-diagnostics', async () => syncDiagnosticsSnapshot());
+  ipcMain.handle('settings:start-hotkey-record', async () => helperRuntime.startHotkeyRecord());
+  ipcMain.handle('settings:stop-hotkey-record', () => helperRuntime.stopHotkeyRecord());
+  ipcMain.handle('settings:get-diagnostics', async () => helperRuntime.requestDiagnostics());
   ipcMain.handle('settings:list-installed-apps', async () => listInstalledApps());
   ipcMain.handle('settings:pick-exe-path', async (event) => {
     const browserWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
@@ -1533,10 +1562,14 @@ function registerNativeEvents() {
 
   nativeClient.on('hotkey-record-state', (payload) => {
     appLogger.info('hotkey', 'Hotkey recorder state updated.', payload);
-    settingsWindowManager.syncHotkeyRecordState(payload);
+    void helperRuntime.handleHotkeyRecordState(payload);
   });
 
   nativeClient.on('diagnostics', (payload) => {
+    void helperRuntime.handleHelperDiagnostics(payload);
+    if (payload?.connected === false && !globalEnabled) {
+      return;
+    }
     void syncDiagnosticsSnapshot(payload);
   });
 
