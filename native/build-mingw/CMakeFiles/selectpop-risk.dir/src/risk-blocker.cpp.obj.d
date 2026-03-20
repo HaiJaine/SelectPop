@@ -1,5 +1,6 @@
-CMakeFiles/selectpop-native-helper.dir/src/main.cpp.obj: \
- D:\code\tools\SelectPop\native\src\main.cpp \
+CMakeFiles/selectpop-risk.dir/src/risk-blocker.cpp.obj: \
+ D:\code\tools\SelectPop\native\src\risk-blocker.cpp \
+ D:\code\tools\SelectPop\native\src\risk-blocker.h \
  C:/dev_env/mingw64/x86_64-w64-mingw32/include/windows.h \
  C:/dev_env/mingw64/x86_64-w64-mingw32/include/_mingw.h \
  C:/dev_env/mingw64/x86_64-w64-mingw32/include/_mingw_mac.h \
@@ -231,42 +232,6 @@ CMakeFiles/selectpop-native-helper.dir/src/main.cpp.obj: \
  C:/dev_env/mingw64/x86_64-w64-mingw32/include/winsvc.h \
  C:/dev_env/mingw64/x86_64-w64-mingw32/include/mcx.h \
  C:/dev_env/mingw64/x86_64-w64-mingw32/include/imm.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/shellapi.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/shellscalingapi.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/shtypes.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpc.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcdce.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcdcep.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcnsi.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcnterr.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcasync.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcndr.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcnsip.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/rpcsal.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/ole2.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/objbase.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/combaseapi.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/wtypesbase.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/unknwnbase.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/objidlbase.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/cguid.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/objidl.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/unknwn.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/wtypes.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/urlmon.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/oleidl.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/servprov.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/msxml.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/oaidl.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/propidl.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/oleauto.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/uiautomation.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/uiautomationcore.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/oleacc.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/uiautomationclient.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/uiautomationcoreapi.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/psapi.h \
- D:\code\tools\SelectPop\native\src\risk-blocker.h \
  C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/string \
  C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/requires_hosted.h \
  C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/stringfwd.h \
@@ -362,126 +327,4 @@ CMakeFiles/selectpop-native-helper.dir/src/main.cpp.obj: \
  C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/ranges_algobase.h \
  C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/pstl/glue_algorithm_defs.h \
  C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/pstl/execution_defs.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/array \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/atomic \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/atomic_base.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/atomic_lockfree_defines.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/atomic_wait.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/cstdint \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/stdint.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/stdint.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/gthr.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/gthr-default.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/pthread.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/sys/types.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/process.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/corecrt_startup.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/signal.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/pthread_signal.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/time.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/sys/timeb.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/sec_api/sys/timeb_s.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/_timeval.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/pthread_time.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/pthread_compat.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/sched.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/pthread_unistd.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/std_mutex.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/chrono \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/chrono.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ratio \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/limits \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ctime \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/parse_numbers.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/sstream \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/istream \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ios \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/exception \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/exception_ptr.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/cxxabi_init_exception.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/typeinfo \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/nested_exception.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/ios_base.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ext/atomicity.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/atomic_word.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_classes.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_classes.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/system_error \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/error_constants.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/stdexcept \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/streambuf \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/streambuf.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/basic_ios.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_facets.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/cwctype \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/wctype.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/ctype_base.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/streambuf_iterator.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/ctype_inline.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_facets.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/basic_ios.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ostream \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/ostream.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/ostream.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/istream.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/sstream.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/shared_ptr.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/shared_ptr_base.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/allocated_ptr.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/unique_ptr.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ext/aligned_buffer.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/ext/concurrence.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/align.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/chrono_io.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/iomanip \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/locale \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_facets_nonio.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/time_members.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/x86_64-w64-mingw32/bits/messages_members.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/codecvt.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_facets_nonio.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/locale_conv.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/quoted_string.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/format \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/charconv \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/optional \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/enable_special_members.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/span \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/monostate.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/formatfwd.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/unicode.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/unicode-data.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/cmath \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/math.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/specfun.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/gamma.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/special_function_util.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/bessel_function.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/beta_function.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/ell_integral.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/exp_integral.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/hypergeometric.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/legendre_function.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/modified_bessel_func.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/poly_hermite.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/poly_laguerre.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/tr1/riemann_zeta.tcc \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/cstring \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/mutex \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/unique_lock.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/set \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/stl_tree.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/node_handle.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/stl_set.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/stl_multiset.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/erase_if.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/thread \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/stop_token \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/std_thread.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/semaphore \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/semaphore_base.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/atomic_timed_wait.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/this_thread_sleep.h \
- C:/dev_env/mingw64/x86_64-w64-mingw32/include/semaphore.h \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/utility \
- C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/bits/stl_relops.h
+ C:/dev_env/mingw64/lib/gcc/x86_64-w64-mingw32/15.2.0/include/c++/array

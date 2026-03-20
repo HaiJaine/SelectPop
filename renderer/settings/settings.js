@@ -2384,6 +2384,8 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>最近触发</span><strong>${escapeHtml(diagnostics.lastReason || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程</span><strong>${escapeHtml(diagnostics.processName || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程路径</span><strong>${escapeHtml(diagnostics.processPath || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>命中高风险项</span><strong>${escapeHtml(diagnostics.blockedRiskCategory || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>命中信号</span><strong>${escapeHtml(diagnostics.blockedRiskSignal || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>命中规则</span><strong>${escapeHtml(diagnostics.matchedCopyRule || '默认自动')}</strong></div>
           <div class="diagnostics-row"><span>请求模式</span><strong>${escapeHtml(diagnostics.requestedCopyMode || 'auto')}</strong></div>
           <div class="diagnostics-row"><span>实际模式</span><strong>${escapeHtml(diagnostics.effectiveCopyMode || 'auto')}</strong></div>

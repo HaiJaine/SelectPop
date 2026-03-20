@@ -116,6 +116,19 @@ depend:
 .PHONY : depend
 
 #=============================================================================
+# Target rules for targets named selectpop-risk
+
+# Build rule for target.
+selectpop-risk: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 selectpop-risk
+.PHONY : selectpop-risk
+
+# fast build rule for target.
+selectpop-risk/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/build
+.PHONY : selectpop-risk/fast
+
+#=============================================================================
 # Target rules for targets named selectpop-native-helper
 
 # Build rule for target.
@@ -127,6 +140,19 @@ selectpop-native-helper: cmake_check_build_system
 selectpop-native-helper/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/build
 .PHONY : selectpop-native-helper/fast
+
+#=============================================================================
+# Target rules for targets named selectpop-risk-tests
+
+# Build rule for target.
+selectpop-risk-tests: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 selectpop-risk-tests
+.PHONY : selectpop-risk-tests
+
+# fast build rule for target.
+selectpop-risk-tests/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/build
+.PHONY : selectpop-risk-tests/fast
 
 src/main.obj: src/main.cpp.obj
 .PHONY : src/main.obj
@@ -152,6 +178,54 @@ src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
+src/risk-blocker.obj: src/risk-blocker.cpp.obj
+.PHONY : src/risk-blocker.obj
+
+# target to build an object file
+src/risk-blocker.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/src/risk-blocker.cpp.obj
+.PHONY : src/risk-blocker.cpp.obj
+
+src/risk-blocker.i: src/risk-blocker.cpp.i
+.PHONY : src/risk-blocker.i
+
+# target to preprocess a source file
+src/risk-blocker.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/src/risk-blocker.cpp.i
+.PHONY : src/risk-blocker.cpp.i
+
+src/risk-blocker.s: src/risk-blocker.cpp.s
+.PHONY : src/risk-blocker.s
+
+# target to generate assembly for a file
+src/risk-blocker.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/src/risk-blocker.cpp.s
+.PHONY : src/risk-blocker.cpp.s
+
+tests/risk-blocker.test.obj: tests/risk-blocker.test.cpp.obj
+.PHONY : tests/risk-blocker.test.obj
+
+# target to build an object file
+tests/risk-blocker.test.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/tests/risk-blocker.test.cpp.obj
+.PHONY : tests/risk-blocker.test.cpp.obj
+
+tests/risk-blocker.test.i: tests/risk-blocker.test.cpp.i
+.PHONY : tests/risk-blocker.test.i
+
+# target to preprocess a source file
+tests/risk-blocker.test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/tests/risk-blocker.test.cpp.i
+.PHONY : tests/risk-blocker.test.cpp.i
+
+tests/risk-blocker.test.s: tests/risk-blocker.test.cpp.s
+.PHONY : tests/risk-blocker.test.s
+
+# target to generate assembly for a file
+tests/risk-blocker.test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/tests/risk-blocker.test.cpp.s
+.PHONY : tests/risk-blocker.test.cpp.s
+
 # Help Target
 help:
 	@echo The following are some of the valid targets for this Makefile:
@@ -161,9 +235,17 @@ help:
 	@echo ... edit_cache
 	@echo ... rebuild_cache
 	@echo ... selectpop-native-helper
+	@echo ... selectpop-risk
+	@echo ... selectpop-risk-tests
 	@echo ... src/main.obj
 	@echo ... src/main.i
 	@echo ... src/main.s
+	@echo ... src/risk-blocker.obj
+	@echo ... src/risk-blocker.i
+	@echo ... src/risk-blocker.s
+	@echo ... tests/risk-blocker.test.obj
+	@echo ... tests/risk-blocker.test.i
+	@echo ... tests/risk-blocker.test.s
 .PHONY : help
 
 

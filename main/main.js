@@ -149,6 +149,8 @@ function createEmptyDiagnostics() {
     processPath: '',
     windowTitle: '',
     className: '',
+    blockedRiskCategory: '',
+    blockedRiskSignal: '',
     matchedCopyRule: '',
     requestedCopyMode: 'auto',
     effectiveCopyMode: 'auto',
@@ -157,6 +159,10 @@ function createEmptyDiagnostics() {
     helperWorkingSetBytes: 0,
     helperPrivateBytes: 0
   };
+}
+
+function hasBlockedRiskDiagnostics(diagnostics = {}) {
+  return Boolean(String(diagnostics?.blockedRiskCategory || '').trim());
 }
 
 function createHelperDisconnectedDiagnostics(baseDiagnostics = null) {
@@ -1608,12 +1614,22 @@ function startHookWorker() {
 
 function registerNativeEvents() {
   nativeClient.on('selection-found', async (payload = {}) => {
+    const diagnostics = payload.diagnostics || {};
+    if (hasBlockedRiskDiagnostics(diagnostics)) {
+      appLogger.info('selection', 'Skipped popup because helper blocked a high-risk foreground.', {
+        category: diagnostics.blockedRiskCategory,
+        signal: diagnostics.blockedRiskSignal,
+        processName: diagnostics.processName,
+        processPath: diagnostics.processPath
+      });
+      return;
+    }
     const flowId = selectionPopupController.beginFlow();
     try {
       await handleRecoveredSelection({
         helperText: payload.text,
-        diagnostics: payload.diagnostics || {},
-        strategy: payload.strategy || payload.diagnostics?.lastStrategy || '',
+        diagnostics,
+        strategy: payload.strategy || diagnostics?.lastStrategy || '',
         mouse: payload.mouse || { x: 0, y: 0 },
         anchorRect: payload.anchorRect || null,
         flowId
@@ -1640,12 +1656,22 @@ function registerNativeEvents() {
   });
 
   nativeClient.on('selection-failed', (payload) => {
+    const diagnostics = payload?.diagnostics || payload || {};
+    if (hasBlockedRiskDiagnostics(diagnostics)) {
+      appLogger.info('selection', 'Skipped recovery because helper blocked a high-risk foreground.', {
+        category: diagnostics.blockedRiskCategory,
+        signal: diagnostics.blockedRiskSignal,
+        processName: diagnostics.processName,
+        processPath: diagnostics.processPath
+      });
+      return;
+    }
     const flowId = selectionPopupController.beginFlow();
-    appLogger.warn('selection', 'Selection read failed.', payload?.diagnostics || payload || {});
+    appLogger.warn('selection', 'Selection read failed.', diagnostics);
     void handleRecoveredSelection({
       helperText: '',
-      diagnostics: payload?.diagnostics || payload || {},
-      strategy: payload?.diagnostics?.lastStrategy || '',
+      diagnostics,
+      strategy: diagnostics?.lastStrategy || '',
       mouse: null,
       anchorRect: null,
       flowId

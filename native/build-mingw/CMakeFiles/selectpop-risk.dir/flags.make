@@ -4,7 +4,7 @@
 # compile CXX with C:/dev_env/mingw64/bin/g++.exe
 CXX_DEFINES = -DNOMINMAX -DUNICODE -DWIN32_LEAN_AND_MEAN -D_UNICODE
 
-CXX_INCLUDES = @CMakeFiles/selectpop-native-helper.dir/includes_CXX.rsp
+CXX_INCLUDES = @CMakeFiles/selectpop-risk.dir/includes_CXX.rsp
 
 CXX_FLAGS = -O3 -DNDEBUG -std=c++20
 

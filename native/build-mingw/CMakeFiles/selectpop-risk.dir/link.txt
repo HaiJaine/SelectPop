@@ -1,0 +1,2 @@
+C:\dev_env\mingw64\bin\ar.exe qc libselectpop-risk.a "CMakeFiles/selectpop-risk.dir/src/risk-blocker.cpp.obj"
+C:\dev_env\mingw64\bin\ranlib.exe libselectpop-risk.a

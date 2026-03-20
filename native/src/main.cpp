@@ -5,6 +5,8 @@
 #include <oleacc.h>
 #include <psapi.h>
 
+#include "risk-blocker.h"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -557,8 +559,11 @@ struct DiagnosticsSnapshot {
   std::string last_reason;
   std::string last_error;
   std::string process_name;
+  std::string process_path;
   std::string window_title;
   std::string class_name;
+  std::string blocked_risk_category;
+  std::string blocked_risk_signal;
   int selection_length = 0;
   unsigned long long last_trigger_at = 0;
   unsigned long long helper_working_set_bytes = 0;
@@ -581,10 +586,31 @@ struct ForegroundInfo {
   HWND hwnd = nullptr;
   DWORD process_id = 0;
   std::string process_name;
+  std::string process_path;
   std::wstring window_title;
   std::wstring class_name;
   bool fullscreen = false;
+  bool borderless = false;
+  bool remote_session = false;
+  RECT window_rect {};
+  RECT monitor_rect {};
 };
+
+selectpop::risk::ForegroundSnapshot BuildRiskSnapshot(const ForegroundInfo& foreground) {
+  return {
+    foreground.process_name,
+    foreground.process_path,
+    WideToUtf8(foreground.window_title),
+    WideToUtf8(foreground.class_name),
+    foreground.fullscreen,
+    foreground.borderless,
+    foreground.remote_session,
+    foreground.window_rect,
+    foreground.monitor_rect,
+    foreground.hwnd != nullptr,
+    foreground.hwnd != nullptr
+  };
+}
 
 std::optional<std::string> NormalizeKeyNameFromVk(UINT vk) {
   if (vk >= 'A' && vk <= 'Z') {
@@ -1586,8 +1612,11 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   diagnostics.last_reason = payload.reason;
   diagnostics.last_trigger_at = NowTick();
   diagnostics.process_name = foreground.process_name;
+  diagnostics.process_path = foreground.process_path;
   diagnostics.window_title = WideToUtf8(foreground.window_title);
   diagnostics.class_name = WideToUtf8(foreground.class_name);
+  diagnostics.blocked_risk_category.clear();
+  diagnostics.blocked_risk_signal.clear();
   LogInfo(
     "Processing selection. reason=" + payload.reason +
     ", process=" + diagnostics.process_name +
@@ -1595,6 +1624,10 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   );
 
   if (!IsForegroundEligible(foreground, &diagnostics.last_error)) {
+    const auto blocked_risk =
+      selectpop::risk::EvaluateRiskBlock(BuildRiskSnapshot(foreground), CurrentConfig().hard_disabled_categories);
+    diagnostics.blocked_risk_category = blocked_risk.category;
+    diagnostics.blocked_risk_signal = blocked_risk.signal;
     UpdateDiagnostics(diagnostics);
     LogWarn("Selection blocked. reason=" + diagnostics.last_error);
     SendSelectionFailed(diagnostics.last_error, diagnostics);
@@ -1655,6 +1688,7 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
 ForegroundInfo NativeHelperApp::GetForegroundInfo() const {
   ForegroundInfo info;
   info.hwnd = GetForegroundWindow();
+  info.remote_session = GetSystemMetrics(SM_REMOTESESSION) != 0;
 
   if (!info.hwnd) {
     return info;
@@ -1682,6 +1716,7 @@ ForegroundInfo NativeHelperApp::GetForegroundInfo() const {
       std::wstring full_path(path, length);
       const auto slash = full_path.find_last_of(L"\\/");
       const std::wstring file_name = slash == std::wstring::npos ? full_path : full_path.substr(slash + 1);
+      info.process_path = ToLowerAscii(WideToUtf8(full_path));
       info.process_name = ToLowerAscii(WideToUtf8(file_name));
     }
 
@@ -1693,8 +1728,10 @@ ForegroundInfo NativeHelperApp::GetForegroundInfo() const {
   monitor.cbSize = sizeof(monitor);
 
   if (GetWindowRect(info.hwnd, &rect) != FALSE) {
+    info.window_rect = rect;
     if (const HMONITOR monitor_handle = MonitorFromWindow(info.hwnd, MONITOR_DEFAULTTONEAREST)) {
       if (GetMonitorInfoW(monitor_handle, &monitor) != FALSE) {
+        info.monitor_rect = monitor.rcMonitor;
         info.fullscreen =
           rect.left <= monitor.rcMonitor.left &&
           rect.top <= monitor.rcMonitor.top &&
@@ -1703,6 +1740,9 @@ ForegroundInfo NativeHelperApp::GetForegroundInfo() const {
       }
     }
   }
+
+  const LONG_PTR style = GetWindowLongPtrW(info.hwnd, GWL_STYLE);
+  info.borderless = (style & WS_CAPTION) == 0 && (style & WS_THICKFRAME) == 0;
 
   return info;
 }
@@ -1738,62 +1778,12 @@ bool NativeHelperApp::IsForegroundEligible(const ForegroundInfo& foreground, std
     return false;
   }
 
-  const auto has_category = [&config](const std::string& category) {
-    return std::find(config.hard_disabled_categories.begin(), config.hard_disabled_categories.end(), category) !=
-      config.hard_disabled_categories.end();
-  };
+  const selectpop::risk::RiskBlockResult risk =
+    selectpop::risk::EvaluateRiskBlock(BuildRiskSnapshot(foreground), config.hard_disabled_categories);
 
-  if (foreground.fullscreen && has_category("fullscreen-exclusive")) {
-    *reason = "Fullscreen window is disabled.";
+  if (risk.blocked) {
+    *reason = risk.reason;
     return false;
-  }
-
-  if (has_category("screenshot-tools")) {
-    static const std::vector<std::string> screenshot_processes = {
-      "snippingtool.exe",
-      "screenclippinghost.exe",
-      "sharex.exe",
-      "snipaste.exe"
-    };
-
-    if (std::find(screenshot_processes.begin(), screenshot_processes.end(), foreground.process_name) !=
-        screenshot_processes.end()) {
-      *reason = "Screenshot tool is disabled.";
-      return false;
-    }
-  }
-
-  if (has_category("remote-control")) {
-    static const std::vector<std::string> remote_processes = {
-      "teamviewer.exe",
-      "anydesk.exe",
-      "sunloginclient.exe",
-      "todesk.exe",
-      "mstsc.exe",
-      "msrdc.exe"
-    };
-
-    if (std::find(remote_processes.begin(), remote_processes.end(), foreground.process_name) !=
-        remote_processes.end()) {
-      *reason = foreground.process_name == "mstsc.exe" || foreground.process_name == "msrdc.exe"
-        ? "Microsoft Remote Desktop client is disabled."
-        : "Remote control tool is disabled.";
-      return false;
-    }
-  }
-
-  if (has_category("security-sensitive")) {
-    static const std::vector<std::string> security_processes = {
-      "keepass.exe",
-      "1password.exe",
-      "lastpass.exe"
-    };
-
-    if (std::find(security_processes.begin(), security_processes.end(), foreground.process_name) !=
-        security_processes.end()) {
-      *reason = "Security-sensitive process is disabled.";
-      return false;
-    }
   }
 
   return true;
@@ -2372,8 +2362,11 @@ std::string NativeHelperApp::BuildDiagnosticsJson(const DiagnosticsSnapshot& dia
           << "\"lastReason\":" << JsonQuote(diagnostics.last_reason) << ","
           << "\"lastError\":" << JsonQuote(diagnostics.last_error) << ","
           << "\"processName\":" << JsonQuote(diagnostics.process_name) << ","
+          << "\"processPath\":" << JsonQuote(diagnostics.process_path) << ","
           << "\"windowTitle\":" << JsonQuote(diagnostics.window_title) << ","
           << "\"className\":" << JsonQuote(diagnostics.class_name) << ","
+          << "\"blockedRiskCategory\":" << JsonQuote(diagnostics.blocked_risk_category) << ","
+          << "\"blockedRiskSignal\":" << JsonQuote(diagnostics.blocked_risk_signal) << ","
           << "\"selectionLength\":" << diagnostics.selection_length << ","
           << "\"lastTriggerAt\":" << diagnostics.last_trigger_at << ","
           << "\"helperWorkingSetBytes\":" << diagnostics.helper_working_set_bytes << ","
