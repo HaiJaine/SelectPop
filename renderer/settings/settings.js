@@ -95,8 +95,8 @@ const QUICK_PICK_ICON_IDS = [
 ];
 const COPY_APP_RULE_MODE_OPTIONS = [
   { id: 'auto', label: '默认自动' },
-  { id: 'force_copy', label: '强制 Ctrl+C' },
-  { id: 'skip_copy', label: '禁止 Ctrl+C' }
+  { id: 'force_shortcut_copy', label: '强制快捷键复制' },
+  { id: 'skip_copy', label: '禁止兼容复制' }
 ];
 
 const state = {
@@ -194,7 +194,15 @@ function inferProcessNameFromExePath(exePath) {
 }
 
 function normalizeCopyAppRuleMode(mode) {
-  return COPY_APP_RULE_MODE_OPTIONS.some((item) => item.id === mode) ? mode : 'auto';
+  const normalizedMode =
+    mode === 'force_copy'
+      ? 'force_shortcut_copy'
+      : mode === 'force_command_copy'
+        ? 'force_shortcut_copy'
+        : mode === 'skip_command_copy'
+          ? 'skip_copy'
+        : mode;
+  return COPY_APP_RULE_MODE_OPTIONS.some((item) => item.id === normalizedMode) ? normalizedMode : 'auto';
 }
 
 function getCopyAppRuleModeLabel(mode) {
@@ -859,6 +867,7 @@ function ensureSelectionDraft() {
 function createSelectionDraft(selection) {
   return {
     ...deepClone(selection),
+    copy_fallback_enabled: selection?.copy_fallback_enabled !== false,
     copy_app_rules: Array.isArray(selection?.copy_app_rules)
       ? selection.copy_app_rules.map((rule) => ({
           id: String(rule?.id || createClientId('copy-rule')),
@@ -894,7 +903,7 @@ function createCopyAppRuleDraft(rule = null) {
     id: String(rule?.id || createClientId('copy-rule')),
     label: String(rule?.label || '').trim() || processName || '未命名程序',
     enabled: rule?.enabled !== false,
-    mode: normalizeCopyAppRuleMode(rule?.mode || 'force_copy'),
+    mode: normalizeCopyAppRuleMode(rule?.mode || 'force_shortcut_copy'),
     exe_path: exePath,
     process_name: processName,
     source: rule?.source === 'installed' ? 'installed' : 'manual'
@@ -905,8 +914,8 @@ function buildCopyAppRulePayload(draft) {
   const exePath = normalizeExePath(draft?.exe_path || '');
   const processName = canonicalizeProcessName(draft?.process_name || '') || inferProcessNameFromExePath(exePath);
 
-  if (!exePath) {
-    throw new Error('请选择有效的 exe 路径。');
+  if (!exePath && !processName) {
+    throw new Error('请至少填写命中的进程名或 EXE 路径。');
   }
 
   return {
@@ -1400,9 +1409,10 @@ function buildSelectionPayload(draft) {
   const payload = {
     mode: draft.mode || 'auto',
     auxiliary_hotkey: draft.auxiliary_hotkey || [],
+    copy_fallback_enabled: draft.copy_fallback_enabled !== false,
+    copy_app_rules: getSelectionCopyAppRules(draft).map((rule) => buildCopyAppRulePayload(rule)),
     blacklist_exes: parseLineList(draft.blacklist_text),
     whitelist_exes: parseLineList(draft.whitelist_text),
-    copy_app_rules: getSelectionCopyAppRules(draft).map((rule) => buildCopyAppRulePayload(rule)),
     hard_disabled_categories: Array.isArray(draft.hard_disabled_categories)
       ? draft.hard_disabled_categories
       : [],
@@ -1417,7 +1427,6 @@ function buildSelectionPayload(draft) {
     proxy: {
       mode: draft.proxy_mode || 'system'
     },
-    copy_fallback_enabled: draft.copy_fallback_enabled === true,
     diagnostics_enabled: draft.diagnostics_enabled !== false
   };
 
@@ -2076,9 +2085,10 @@ function renderSelectionSettings() {
   const draft = state.selectionDraft || {
     mode: 'auto',
     auxiliary_hotkey: [],
+    copy_fallback_enabled: true,
+    copy_app_rules: [],
     blacklist_text: '',
     whitelist_text: '',
-    copy_app_rules: [],
     hard_disabled_categories: [],
     toolbar_offset_x: 0,
     toolbar_offset_y: 0,
@@ -2087,10 +2097,29 @@ function renderSelectionSettings() {
     proxy_type: 'http',
     proxy_host: '',
     proxy_port: '',
-    copy_fallback_enabled: true,
     diagnostics_enabled: true
   };
   const diagnostics = state.diagnostics || {};
+  const copyRules = getSelectionCopyAppRules(draft);
+  const renderCopyRuleRow = (rule) => `
+    <div class="copy-rule-row">
+      <label class="checkbox-row">
+        <input type="checkbox" data-action="toggle-copy-rule" data-id="${rule.id}" ${rule.enabled !== false ? 'checked' : ''} />
+        <span>${escapeHtml(rule.label || rule.process_name || rule.exe_path || '未命名程序')}</span>
+      </label>
+      <div class="copy-rule-meta">${escapeHtml(rule.process_name || '未填写进程名')}</div>
+      <div class="copy-rule-meta">${escapeHtml(rule.exe_path || '未限制路径')}</div>
+      <div class="selection-inline">
+        <select data-action="change-copy-rule-mode" data-id="${rule.id}">
+          ${COPY_APP_RULE_MODE_OPTIONS
+            .map((option) => `<option value="${option.id}" ${rule.mode === option.id ? 'selected' : ''}>${option.label}</option>`)
+            .join('')}
+        </select>
+        <button class="inline-button" type="button" data-action="edit-copy-rule" data-id="${rule.id}">编辑</button>
+        <button class="inline-button danger" type="button" data-action="delete-copy-rule" data-id="${rule.id}">删除</button>
+      </div>
+    </div>
+  `;
 
   return `
     <div class="selection-grid">
@@ -2135,14 +2164,6 @@ function renderSelectionSettings() {
           <label class="checkbox-row">
             <input
               type="checkbox"
-              data-selection-field="copy_fallback_enabled"
-              ${draft.copy_fallback_enabled ? 'checked' : ''}
-            />
-            <span>启用安全 Copy fallback</span>
-          </label>
-          <label class="checkbox-row">
-            <input
-              type="checkbox"
               data-selection-field="diagnostics_enabled"
               ${draft.diagnostics_enabled !== false ? 'checked' : ''}
             />
@@ -2152,53 +2173,34 @@ function renderSelectionSettings() {
       </section>
 
       <section class="selection-card">
+        <div class="selection-card-title">原生取词</div>
+        <div class="field-hint">划词阶段优先使用 UI Automation、MSAA 和 Win32 读取；兼容模式会先观察剪贴板变化，再在允许的应用中受控发送复制快捷键，并立即恢复剪贴板。</div>
+      </section>
+
+      <section class="selection-card">
         <div class="selection-card-title">兼容取词</div>
-        <div class="field-hint">默认所有软件都沿用当前划词方案；只有 PDF 阅读器等问题软件才单独配置强制或跳过 Ctrl+C。</div>
-        <div class="selection-inline">
-          <button class="inline-button" type="button" data-action="add-copy-rule-installed">从系统软件添加</button>
-          <button class="inline-button" type="button" data-action="add-copy-rule-manual">手动添加 EXE</button>
+        <div class="toggle-panel">
+          <label class="checkbox-row">
+            <input
+              type="checkbox"
+              data-selection-field="copy_fallback_enabled"
+              ${draft.copy_fallback_enabled !== false ? 'checked' : ''}
+            />
+            <span>启用兼容复制取词</span>
+          </label>
         </div>
-        ${
-          getSelectionCopyAppRules(draft).length
-            ? `
-              <div class="list-grid">
-                ${getSelectionCopyAppRules(draft)
-                  .map(
-                    (rule) => `
-                      <article class="list-row compatibility-row">
-                        <div class="service-kind-badge kind-free">Rule</div>
-                        <div class="list-main">
-                          <div class="list-title">${escapeHtml(rule.label)}</div>
-                          <div class="list-meta">
-                            <span class="tag">${escapeHtml(getCopyAppRuleModeLabel(rule.mode))}</span>
-                            <span class="tag subtle">${escapeHtml(rule.source === 'installed' ? '系统软件' : '手动添加')}</span>
-                            <span>${escapeHtml(rule.process_name || '未知进程')}</span>
-                          </div>
-                          <div class="provider-summary-url">${escapeHtml(rule.exe_path || '')}</div>
-                        </div>
-                        <div class="list-actions">
-                          <label class="toggle">
-                            <input type="checkbox" data-action="toggle-copy-rule" data-id="${rule.id}" ${rule.enabled !== false ? 'checked' : ''} />
-                            <span class="toggle-track"></span>
-                          </label>
-                          <select class="inline-select" data-action="change-copy-rule-mode" data-id="${rule.id}">
-                            ${COPY_APP_RULE_MODE_OPTIONS
-                              .map(
-                                (option) => `<option value="${option.id}" ${rule.mode === option.id ? 'selected' : ''}>${option.label}</option>`
-                              )
-                              .join('')}
-                          </select>
-                          <button class="inline-button" type="button" data-action="edit-copy-rule" data-id="${rule.id}">编辑</button>
-                          <button class="inline-button danger" type="button" data-action="delete-copy-rule" data-id="${rule.id}">删除</button>
-                        </div>
-                      </article>
-                    `
-                  )
-                  .join('')}
-              </div>
-            `
-            : '<div class="empty-state">当前还没有兼容取词规则。</div>'
-        }
+        <div class="field-hint">兼容模式会短暂备份并恢复剪贴板；原生读取失败时，会只在允许的应用中发送受控的 <code>Ctrl+C</code> 或 <code>Ctrl+Shift+C</code>。内置默认策略会优先照顾 VS Code / Cursor，并默认跳过 JetBrains 系列。</div>
+        <div class="selection-inline">
+          <button class="inline-button" type="button" data-action="add-copy-rule-installed">从系统软件添加规则</button>
+          <button class="inline-button" type="button" data-action="add-copy-rule-manual">手动添加规则</button>
+        </div>
+        <div class="copy-rule-list">
+          ${
+            copyRules.length
+              ? copyRules.map((rule) => renderCopyRuleRow(rule)).join('')
+              : '<div class="empty-state">当前没有自定义兼容规则，将使用内置默认策略。</div>'
+          }
+        </div>
       </section>
 
       <section class="selection-card">
@@ -2375,6 +2377,11 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>Helper PID</span><strong>${escapeHtml(diagnostics.helperPid || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近策略</span><strong>${escapeHtml(diagnostics.lastStrategy || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最终策略</span><strong>${escapeHtml(diagnostics.finalSelectionStrategy || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>捕获来源</span><strong>${escapeHtml(diagnostics.captureSource || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>焦点类型</span><strong>${escapeHtml(diagnostics.focusKind || 'unknown')}</strong></div>
+          <div class="diagnostics-row"><span>复制快捷键</span><strong>${escapeHtml(diagnostics.copyShortcutName || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>快捷键复制尝试</span><strong>${diagnostics.copyShortcutTried ? '已尝试' : '未尝试'}</strong></div>
+          <div class="diagnostics-row"><span>Guard 状态</span><strong>${diagnostics.shortcutGuardPassed ? '已通过' : '未通过'}</strong></div>
           <div class="diagnostics-row"><span>最近触发</span><strong>${escapeHtml(diagnostics.lastReason || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程</span><strong>${escapeHtml(diagnostics.processName || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程路径</span><strong>${escapeHtml(diagnostics.processPath || '暂无')}</strong></div>
@@ -2383,10 +2390,8 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>当前前台标题</span><strong>${escapeHtml(diagnostics.currentForegroundWindowTitle || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>命中高风险项</span><strong>${escapeHtml(diagnostics.blockedRiskCategory || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>命中信号</span><strong>${escapeHtml(diagnostics.blockedRiskSignal || '暂无')}</strong></div>
-          <div class="diagnostics-row"><span>命中规则</span><strong>${escapeHtml(diagnostics.matchedCopyRule || '默认自动')}</strong></div>
-          <div class="diagnostics-row"><span>请求模式</span><strong>${escapeHtml(diagnostics.requestedCopyMode || 'auto')}</strong></div>
-          <div class="diagnostics-row"><span>实际模式</span><strong>${escapeHtml(diagnostics.effectiveCopyMode || 'auto')}</strong></div>
-          <div class="diagnostics-row"><span>最终来源</span><strong>${escapeHtml(diagnostics.finalTextSource || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>剪贴板变化</span><strong>${diagnostics.clipboardChanged ? '已变化' : '未变化'}</strong></div>
+          <div class="diagnostics-row"><span>剪贴板恢复</span><strong>${diagnostics.clipboardRestored ? '已恢复' : '未恢复'}</strong></div>
           <div class="diagnostics-row"><span>最近窗口类</span><strong>${escapeHtml(diagnostics.className || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>采样时间</span><strong>${escapeHtml(diagnostics.sampledAt || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>Electron 总计</span><strong>${escapeHtml(formatMemoryBucket(diagnostics.memory?.electron?.total))}</strong></div>
@@ -2406,6 +2411,7 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>翻译缓存条数</span><strong>${escapeHtml(String(diagnostics.translationCacheEntries || 0))}</strong></div>
           <div class="diagnostics-row wide"><span>总工作集</span><strong>${escapeHtml(formatMemoryBucket(diagnostics.memory?.total))}</strong></div>
           <div class="diagnostics-row wide"><span>AI 最近状态</span><strong>${escapeHtml(diagnostics.aiLastStateReason || '暂无')}</strong></div>
+          <div class="diagnostics-row wide"><span>Guard 原因</span><strong>${escapeHtml(diagnostics.shortcutSkipReason || '暂无')}</strong></div>
           <div class="diagnostics-row wide"><span>最近错误</span><strong>${escapeHtml(diagnostics.lastError || '暂无')}</strong></div>
         </div>
         <div class="field-hint">启用后会把关键操作写入程序目录 <code>data/logs/selectpop.log</code>，方便确认 helper 有没有触发、有没有读到文本。</div>
@@ -3314,7 +3320,7 @@ elements.content.addEventListener('click', (event) => {
       setStatus(error.message || String(error), 'error', true);
     });
   } else if (action === 'add-copy-rule-installed') {
-    openCopyAppRuleDrawer('create', { mode: 'force_copy', source: 'installed' }, 'installed');
+    openCopyAppRuleDrawer('create', { mode: 'force_shortcut_copy', source: 'installed' }, 'installed');
   } else if (action === 'add-copy-rule-manual') {
     void window.settingsApi.pickExePath().then((result) => {
       if (!result?.exe_path) {
@@ -3325,7 +3331,7 @@ elements.content.addEventListener('click', (event) => {
         label: result.label,
         exe_path: result.exe_path,
         process_name: result.process_name,
-        mode: 'force_copy',
+        mode: 'force_shortcut_copy',
         source: 'manual'
       }, 'manual');
     }).catch((error) => {
@@ -3891,7 +3897,10 @@ window.addEventListener('beforeunload', () => {
   }
 });
 
-Promise.all([window.settingsApi.getConfig(), window.settingsApi.getDiagnostics()])
+Promise.all([
+  window.settingsApi.getConfig(),
+  window.settingsApi.getDiagnostics()
+])
   .then(async ([config, diagnostics]) => {
     mergeIconNames(await window.settingsApi.listIconNames());
     mergeIconNames(config.tools?.map((tool) => tool.icon));

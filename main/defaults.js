@@ -1,5 +1,5 @@
 export const APP_NAME = 'SelectPop';
-export const CONFIG_VERSION = 18;
+export const CONFIG_VERSION = 21;
 export const BUILTIN_COPY_TOOL_ID = 'tool-copy';
 
 export const BUILTIN_ICON_IDS = [
@@ -101,9 +101,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   selection: {
     mode: 'auto',
     auxiliary_hotkey: [],
+    copy_fallback_enabled: true,
+    copy_app_rules: [],
     blacklist_exes: [],
     whitelist_exes: [],
-    copy_app_rules: [],
     hard_disabled_categories: [...HARD_DISABLED_CATEGORIES],
     toolbar_offset: {
       x: 0,
@@ -113,7 +114,6 @@ export const DEFAULT_CONFIG = Object.freeze({
     proxy: {
       mode: 'system'
     },
-    copy_fallback_enabled: true,
     diagnostics_enabled: true
   },
   logging: {

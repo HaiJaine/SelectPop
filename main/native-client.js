@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import electron from 'electron';
 import { normalizeProcessList } from '../shared/process-name.js';
+import { buildCopyRuleMatcherPayload } from './copy-app-rules.js';
 
 const REQUIRED_HELPER_FILES = ['libwinpthread-1.dll'];
 const { app } = electron;
@@ -38,13 +39,13 @@ function buildSelectionPayload(config = {}) {
   return {
     mode: selection.mode || 'auto',
     auxiliary_hotkey: sanitizeKeys(selection.auxiliary_hotkey),
+    copy_fallback_enabled: selection.copy_fallback_enabled !== false,
+    ...buildCopyRuleMatcherPayload(selection.copy_app_rules),
     blacklist_exes: sanitizeStringList(selection.blacklist_exes),
     whitelist_exes: sanitizeStringList(selection.whitelist_exes),
     hard_disabled_categories: Array.isArray(selection.hard_disabled_categories)
       ? selection.hard_disabled_categories
       : [],
-    // Copy fallback is now coordinated in the main process so per-app rules can decide it.
-    copy_fallback_enabled: false,
     diagnostics_enabled: selection.diagnostics_enabled !== false,
     logging_enabled: config.logging?.enabled === true
   };
@@ -130,24 +131,6 @@ export class NativeClient extends EventEmitter {
     await this.start(this.cachedConfig);
     this.logger.info?.('Requesting diagnostic snapshot.');
     return this.#request('diagnostics_request');
-  }
-
-  async readClipboardTextAfterCopy({
-    keys = ['ctrl', 'c'],
-    timeoutMs,
-    pollMs
-  } = {}) {
-    await this.start(this.cachedConfig);
-    this.logger.info?.('Requesting clipboard text after copy hotkey.', {
-      keys: sanitizeKeys(keys),
-      timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : null,
-      pollMs: Number.isFinite(Number(pollMs)) ? Number(pollMs) : null
-    });
-    return this.#request('clipboard_copy_read_request', {
-      keys: sanitizeKeys(keys),
-      timeoutMs: Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : undefined,
-      pollMs: Number.isFinite(Number(pollMs)) ? Number(pollMs) : undefined
-    });
   }
 
   getProcessInfo() {
@@ -297,7 +280,6 @@ export class NativeClient extends EventEmitter {
         type === 'hotkey_record_finish'
         || type === 'hotkey_send_result'
         || type === 'diagnostic_snapshot'
-        || type === 'clipboard_copy_read_result'
       ) {
         this.pendingRequests.delete(requestId);
 

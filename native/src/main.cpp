@@ -23,6 +23,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -36,8 +37,15 @@ constexpr int kSelectionDelayMs = 150;
 constexpr int kSelectionCooldownMs = 220;
 constexpr int kSelectionPendingWindowMs = 1500;
 constexpr int kSelectionDragThresholdPx = 6;
-constexpr int kCopyFallbackTimeoutMs = 450;
-constexpr int kCopyFallbackPollMs = 25;
+constexpr int kClipboardObserveTimeoutMs = 160;
+constexpr int kClipboardObservePollMs = 20;
+constexpr int kShortcutCopyTimeoutMs = 450;
+constexpr int kShortcutCopyPollMs = 25;
+constexpr int kShortcutCopyGuardWindowMs = 900;
+constexpr int kRecentKeyboardGuardMs = 220;
+constexpr int kSyntheticCopySessionMs = 320;
+constexpr int kUiAutomationAncestorDepth = 6;
+constexpr int kUiAutomationDescendantLimit = 48;
 
 void InitializeProcessDpiAwareness() {
   using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT);
@@ -146,6 +154,35 @@ std::string TrimAscii(const std::string& value) {
 
   const auto end = std::find_if_not(value.rbegin(), value.rend(), is_space).base();
   return std::string(start, end);
+}
+
+std::string NormalizeWindowsPath(std::string value) {
+  value = TrimAscii(value);
+
+  if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+    value = value.substr(1, value.size() - 2);
+  }
+
+  std::replace(value.begin(), value.end(), '/', '\\');
+  return ToLowerAscii(value);
+}
+
+std::vector<std::string> NormalizeWindowsPathList(const std::vector<std::string>& input) {
+  std::vector<std::string> output;
+
+  for (const auto& value : input) {
+    const std::string normalized = NormalizeWindowsPath(value);
+
+    if (normalized.empty()) {
+      continue;
+    }
+
+    if (std::find(output.begin(), output.end(), normalized) == output.end()) {
+      output.push_back(normalized);
+    }
+  }
+
+  return output;
 }
 
 std::string JsonEscape(const std::string& value) {
@@ -522,6 +559,11 @@ struct HotkeyCombo {
 struct SelectionConfig {
   std::string mode = "auto";
   HotkeyCombo auxiliary_hotkey;
+  bool copy_fallback_enabled = true;
+  std::vector<std::string> force_shortcut_copy_exe_paths;
+  std::vector<std::string> skip_copy_exe_paths;
+  std::vector<std::string> force_shortcut_copy_processes;
+  std::vector<std::string> skip_copy_processes;
   std::vector<std::string> blacklist_exes;
   std::vector<std::string> whitelist_exes;
   std::vector<std::string> hard_disabled_categories {
@@ -531,7 +573,6 @@ struct SelectionConfig {
     "fullscreen-exclusive",
     "security-sensitive"
   };
-  bool copy_fallback_enabled = true;
   bool diagnostics_enabled = true;
   bool logging_enabled = false;
 };
@@ -557,6 +598,17 @@ struct DiagnosticsSnapshot {
   bool connected = false;
   bool helper_ready = false;
   std::string last_strategy;
+  std::vector<std::string> attempted_strategies;
+  std::string capture_source;
+  std::string focus_kind = "unknown";
+  bool copy_shortcut_tried = false;
+  std::string copy_shortcut_name;
+  bool shortcut_guard_passed = false;
+  std::string shortcut_skip_reason;
+  bool clipboard_changed = false;
+  bool clipboard_restored = false;
+  RECT resolved_region {};
+  bool has_resolved_region = false;
   std::string last_reason;
   std::string last_error;
   std::string process_name;
@@ -581,6 +633,8 @@ struct SelectionResult {
   RECT anchor_rect {};
   bool has_anchor_rect = false;
   std::string strategy;
+  std::string capture_source;
+  std::string focus_kind = "unknown";
 };
 
 struct ForegroundInfo {
@@ -782,6 +836,169 @@ std::string BuildStringArrayJson(const std::vector<std::string>& values) {
   return output.str();
 }
 
+std::string GetControlTypeProgrammaticName(IUIAutomationElement* element) {
+  if (!element) {
+    return "";
+  }
+
+  CONTROLTYPEID control_type = 0;
+
+  if (FAILED(element->get_CurrentControlType(&control_type))) {
+    return "";
+  }
+
+  switch (control_type) {
+    case UIA_DocumentControlTypeId:
+      return "controltype.document";
+    case UIA_EditControlTypeId:
+      return "controltype.edit";
+    case UIA_TextControlTypeId:
+      return "controltype.text";
+    default:
+      return "";
+  }
+}
+
+std::string BuildUiAutomationSignal(IUIAutomationElement* element) {
+  if (!element) {
+    return "";
+  }
+
+  std::vector<std::string> parts;
+  auto push_property = [&](HRESULT hr, BSTR value) {
+    if (SUCCEEDED(hr) && value) {
+      const std::string normalized = ToLowerAscii(WideToUtf8(std::wstring(value, SysStringLen(value))));
+      if (!normalized.empty()) {
+        parts.push_back(normalized);
+      }
+      SysFreeString(value);
+    }
+  };
+
+  BSTR name = nullptr;
+  BSTR automation_id = nullptr;
+  BSTR class_name = nullptr;
+  push_property(element->get_CurrentName(&name), name);
+  push_property(element->get_CurrentAutomationId(&automation_id), automation_id);
+  push_property(element->get_CurrentClassName(&class_name), class_name);
+
+  const std::string control_type = GetControlTypeProgrammaticName(element);
+  if (!control_type.empty()) {
+    parts.push_back(control_type);
+  }
+
+  std::ostringstream signal;
+  for (std::size_t index = 0; index < parts.size(); index += 1) {
+    if (index != 0) {
+      signal << " ";
+    }
+    signal << parts[index];
+  }
+
+  return signal.str();
+}
+
+std::string ResolveFocusKindFromSignals(const std::vector<std::string>& signals) {
+  for (const auto& signal : signals) {
+    if (signal.find("terminal") != std::string::npos ||
+        signal.find("xterm") != std::string::npos ||
+        signal.find("conpty") != std::string::npos ||
+        signal.find("pty") != std::string::npos ||
+        signal.find("shellintegration") != std::string::npos ||
+        signal.find("terminalinstance") != std::string::npos) {
+      return "terminal";
+    }
+  }
+
+  for (const auto& signal : signals) {
+    if (signal.find("controltype.document") != std::string::npos ||
+        signal.find("controltype.edit") != std::string::npos ||
+        signal.find("editor") != std::string::npos ||
+        signal.find("textarea") != std::string::npos ||
+        signal.find("textinput") != std::string::npos) {
+      return "editor";
+    }
+  }
+
+  return "unknown";
+}
+
+std::string ResolveFocusKindFromUiAutomation(IUIAutomation* automation, IUIAutomationElement* start) {
+  if (!automation || !start) {
+    return "unknown";
+  }
+
+  std::vector<std::string> signals;
+  IUIAutomationTreeWalker* walker = nullptr;
+  automation->get_ControlViewWalker(&walker);
+
+  IUIAutomationElement* current = start;
+  current->AddRef();
+
+  for (int depth = 0; depth < kUiAutomationAncestorDepth && current; depth += 1) {
+    const std::string signal = BuildUiAutomationSignal(current);
+    if (!signal.empty()) {
+      signals.push_back(signal);
+    }
+
+    if (!walker) {
+      break;
+    }
+
+    IUIAutomationElement* parent = nullptr;
+    if (FAILED(walker->GetParentElement(current, &parent)) || !parent) {
+      break;
+    }
+
+    current->Release();
+    current = parent;
+  }
+
+  if (current) {
+    current->Release();
+  }
+
+  if (walker) {
+    walker->Release();
+  }
+
+  IUIAutomationCondition* true_condition = nullptr;
+  HRESULT hr = automation->CreateTrueCondition(&true_condition);
+
+  if (SUCCEEDED(hr) && true_condition) {
+    IUIAutomationElementArray* descendants = nullptr;
+    hr = start->FindAll(TreeScope_Descendants, true_condition, &descendants);
+    true_condition->Release();
+
+    if (SUCCEEDED(hr) && descendants) {
+      int length = 0;
+
+      if (SUCCEEDED(descendants->get_Length(&length)) && length > 0) {
+        const int scan_count = std::min(length, std::min(kUiAutomationDescendantLimit, 24));
+
+        for (int index = 0; index < scan_count; index += 1) {
+          IUIAutomationElement* descendant = nullptr;
+
+          if (FAILED(descendants->GetElement(index, &descendant)) || !descendant) {
+            continue;
+          }
+
+          const std::string signal = BuildUiAutomationSignal(descendant);
+          descendant->Release();
+
+          if (!signal.empty()) {
+            signals.push_back(signal);
+          }
+        }
+      }
+
+      descendants->Release();
+    }
+  }
+
+  return ResolveFocusKindFromSignals(signals);
+}
+
 bool TryReadTextPatternSelection(IUIAutomationElement* element, SelectionResult* result) {
   if (!element || !result) {
     return false;
@@ -911,14 +1128,16 @@ bool TryReadUiAutomationSelection(IUIAutomation* automation, IUIAutomationElemen
     return false;
   }
 
+  result->focus_kind = ResolveFocusKindFromUiAutomation(automation, start);
   IUIAutomationTreeWalker* walker = nullptr;
   automation->get_ControlViewWalker(&walker);
 
   IUIAutomationElement* current = start;
   current->AddRef();
 
-  for (int depth = 0; depth < 6 && current; depth += 1) {
+  for (int depth = 0; depth < kUiAutomationAncestorDepth && current; depth += 1) {
     if (TryReadTextPatternSelection(current, result)) {
+      result->capture_source = "uia";
       current->Release();
 
       if (walker) {
@@ -950,19 +1169,69 @@ bool TryReadUiAutomationSelection(IUIAutomation* automation, IUIAutomationElemen
     walker->Release();
   }
 
+  IUIAutomationCondition* true_condition = nullptr;
+  HRESULT hr = automation->CreateTrueCondition(&true_condition);
+
+  if (FAILED(hr) || !true_condition) {
+    return false;
+  }
+
+  IUIAutomationElementArray* descendants = nullptr;
+  hr = start->FindAll(TreeScope_Descendants, true_condition, &descendants);
+  true_condition->Release();
+
+  if (FAILED(hr) || !descendants) {
+    return false;
+  }
+
+  int length = 0;
+  if (FAILED(descendants->get_Length(&length)) || length <= 0) {
+    descendants->Release();
+    return false;
+  }
+
+  const int scan_count = std::min(length, kUiAutomationDescendantLimit);
+  for (int index = 0; index < scan_count; index += 1) {
+    IUIAutomationElement* descendant = nullptr;
+    if (FAILED(descendants->GetElement(index, &descendant)) || !descendant) {
+      continue;
+    }
+
+    const bool found = TryReadTextPatternSelection(descendant, result);
+    descendant->Release();
+
+    if (found) {
+      result->capture_source = "uia";
+      descendants->Release();
+      return true;
+    }
+  }
+
+  descendants->Release();
   return false;
 }
 
 class ClipboardTextSnapshot {
  public:
-  explicit ClipboardTextSnapshot(std::wstring text) : text_(std::move(text)) {}
+  ClipboardTextSnapshot(std::wstring text, DWORD sequence_number, bool has_text)
+    : text_(std::move(text)), sequence_number_(sequence_number), has_text_(has_text) {}
 
   const std::wstring& text() const {
     return text_;
   }
 
+  DWORD sequence_number() const {
+    return sequence_number_;
+  }
+
+  bool has_text() const {
+    return has_text_;
+  }
+
  private:
   std::wstring text_;
+  DWORD sequence_number_ = 0;
+  bool has_text_ = false;
 };
 
 class ComInitializer {
@@ -1031,14 +1300,42 @@ class NativeHelperApp {
   bool IsForegroundEligible(const ForegroundInfo& foreground, std::string* reason) const;
   bool TryGetSelectionViaUIAutomation(SelectionResult* result, const POINT& point, HWND fallback_hwnd) const;
   bool TryGetSelectionViaLegacyAccessibility(SelectionResult* result, HWND fallback_hwnd) const;
-  bool TryGetSelectionViaCopyFallback(SelectionResult* result) const;
-  std::optional<ClipboardTextSnapshot> ReadClipboardTextAfterHotkey(
+  bool TryObserveClipboardSelection(
+    SelectionResult* result,
+    const ForegroundInfo& foreground,
+    const std::optional<ClipboardTextSnapshot>& baseline_snapshot,
+    DiagnosticsSnapshot* diagnostics
+  ) const;
+  bool TryGetSelectionViaShortcutFallback(
+    SelectionResult* result,
+    const ForegroundInfo& foreground,
+    const TriggerPayload& payload,
+    DiagnosticsSnapshot* diagnostics
+  ) const;
+  std::optional<ClipboardTextSnapshot> ReadClipboardTextAfterShortcut(
     const std::vector<std::string>& keys,
     int timeout_ms,
     int poll_ms,
     std::string* error
   ) const;
   std::optional<ClipboardTextSnapshot> ReadClipboardText() const;
+  bool RestoreClipboardText(const ClipboardTextSnapshot& snapshot) const;
+  bool IsForegroundStable(const ForegroundInfo& expected) const;
+  std::string ResolveShortcutFocusKind(const ForegroundInfo& foreground, const std::string& current_focus_kind) const;
+  std::vector<std::vector<std::string>> BuildShortcutCopyAttempts(
+    const ForegroundInfo& foreground,
+    const std::string& focus_kind
+  ) const;
+  bool IsShortcutCopyAllowed(const ForegroundInfo& foreground) const;
+  bool GuardShortcutCopy(
+    const ForegroundInfo& foreground,
+    const TriggerPayload& payload,
+    DiagnosticsSnapshot* diagnostics
+  ) const;
+  bool AreModifierKeysReleased() const;
+  bool AreMouseButtonsReleased() const;
+  bool IsSyntheticCopySessionActive() const;
+  void BeginSyntheticCopySession() const;
   bool WriteClipboardText(const std::wstring& text) const;
   bool SendHotkey(const std::vector<std::string>& keys) const;
   bool SendKeyChord(const std::vector<UINT>& virtual_keys) const;
@@ -1070,6 +1367,7 @@ class NativeHelperApp {
   mutable std::mutex log_mutex_;
   mutable std::mutex config_mutex_;
   mutable std::mutex diagnostics_mutex_;
+  mutable std::mutex candidate_mutex_;
   mutable std::vector<std::uint8_t> raw_input_buffer_;
   std::atomic<bool> running_ {true};
   std::atomic<bool> selection_busy_ {false};
@@ -1081,7 +1379,11 @@ class NativeHelperApp {
   DiagnosticsSnapshot diagnostics_;
   POINT last_candidate_point_ {};
   std::string last_candidate_reason_;
+  std::optional<ClipboardTextSnapshot> last_candidate_clipboard_snapshot_;
   std::atomic<ULONGLONG> candidate_valid_until_ {0};
+  std::atomic<ULONGLONG> last_pointer_up_tick_ {0};
+  std::atomic<ULONGLONG> last_real_keyboard_input_tick_ {0};
+  mutable std::atomic<ULONGLONG> synthetic_copy_session_until_ {0};
   bool recording_active_ = false;
   int recording_request_id_ = 0;
   UINT recording_main_vk_ = 0;
@@ -1297,25 +1599,6 @@ void NativeHelperApp::HandlePipeCommand(const std::string& line) {
     return;
   }
 
-  if (*type == "clipboard_copy_read_request") {
-    const int request_id = GetJsonInt(line, "requestId").value_or(0);
-    const auto payload = GetJsonObject(line, "payload");
-    const auto keys = payload.has_value() ? GetJsonStringArray(*payload, "keys") : std::vector<std::string> {};
-    const int timeout_ms =
-      payload.has_value() ? GetJsonInt(*payload, "timeoutMs").value_or(kCopyFallbackTimeoutMs) : kCopyFallbackTimeoutMs;
-    const int poll_ms =
-      payload.has_value() ? GetJsonInt(*payload, "pollMs").value_or(kCopyFallbackPollMs) : kCopyFallbackPollMs;
-    std::string error;
-    const auto copied = ReadClipboardTextAfterHotkey(keys, timeout_ms, poll_ms, &error);
-    std::ostringstream response;
-    response << "{\"type\":\"clipboard_copy_read_result\",\"requestId\":" << request_id
-             << ",\"payload\":{\"status\":\"ok\",\"text\":"
-             << JsonQuoteWide(copied.has_value() ? copied->text() : L"")
-             << ",\"error\":" << JsonQuote(error) << "}}";
-    SendMessageJson(response.str());
-    return;
-  }
-
   if (*type == "shutdown") {
     PostMessageW(hwnd_, WM_CLOSE, 0, 0);
   }
@@ -1325,11 +1608,36 @@ void NativeHelperApp::ApplyConfig(const std::string& payload) {
   SelectionConfig next_config;
   next_config.mode = ToLowerAscii(GetJsonString(payload, "mode").value_or("auto"));
   next_config.auxiliary_hotkey = ParseHotkeyCombo(GetJsonStringArray(payload, "auxiliary_hotkey"));
+  next_config.copy_fallback_enabled = GetJsonBool(payload, "copy_fallback_enabled").value_or(true);
+  auto force_shortcut_paths = GetJsonStringArray(payload, "force_shortcut_copy_exe_paths");
+  auto skip_copy_paths = GetJsonStringArray(payload, "skip_copy_exe_paths");
+  auto force_shortcut_processes = GetJsonStringArray(payload, "force_shortcut_copy_processes");
+  auto skip_copy_processes = GetJsonStringArray(payload, "skip_copy_processes");
+
+  if (force_shortcut_paths.empty()) {
+    force_shortcut_paths = GetJsonStringArray(payload, "force_command_copy_exe_paths");
+  }
+
+  if (skip_copy_paths.empty()) {
+    skip_copy_paths = GetJsonStringArray(payload, "skip_command_copy_exe_paths");
+  }
+
+  if (force_shortcut_processes.empty()) {
+    force_shortcut_processes = GetJsonStringArray(payload, "force_command_copy_processes");
+  }
+
+  if (skip_copy_processes.empty()) {
+    skip_copy_processes = GetJsonStringArray(payload, "skip_command_copy_processes");
+  }
+
+  next_config.force_shortcut_copy_exe_paths = NormalizeWindowsPathList(force_shortcut_paths);
+  next_config.skip_copy_exe_paths = NormalizeWindowsPathList(skip_copy_paths);
+  next_config.force_shortcut_copy_processes = NormalizeProcessList(force_shortcut_processes);
+  next_config.skip_copy_processes = NormalizeProcessList(skip_copy_processes);
   next_config.blacklist_exes = NormalizeProcessList(GetJsonStringArray(payload, "blacklist_exes"));
   next_config.whitelist_exes = NormalizeProcessList(GetJsonStringArray(payload, "whitelist_exes"));
   next_config.hard_disabled_categories = GetJsonStringArray(payload, "hard_disabled_categories");
   const bool has_hard_disabled_categories = GetJsonObject(payload, "hard_disabled_categories").has_value();
-  next_config.copy_fallback_enabled = GetJsonBool(payload, "copy_fallback_enabled").value_or(true);
   next_config.diagnostics_enabled = GetJsonBool(payload, "diagnostics_enabled").value_or(true);
   next_config.logging_enabled = GetJsonBool(payload, "logging_enabled").value_or(false);
 
@@ -1419,6 +1727,7 @@ void NativeHelperApp::HandleMouseInput(const RAWMOUSE& mouse) {
     pointer_.moved_during_drag = false;
 
     const ULONGLONG now = NowTick();
+    last_pointer_up_tick_ = now;
     const bool within_multiclick_window =
       now - pointer_.last_up_at <= static_cast<ULONGLONG>(GetDoubleClickTime() + 80) &&
       DistanceBetweenPoints(pointer_.last_up_point, cursor) <= kSelectionDragThresholdPx * 2;
@@ -1453,6 +1762,9 @@ void NativeHelperApp::HandleMouseInput(const RAWMOUSE& mouse) {
 
 void NativeHelperApp::HandleKeyboardInput(const RAWKEYBOARD& keyboard) {
   if (recording_active_) {
+    if (IsSyntheticCopySessionActive()) {
+      return;
+    }
     HandleRecordingRawKeyboard(keyboard);
     return;
   }
@@ -1466,9 +1778,15 @@ void NativeHelperApp::HandleKeyboardInput(const RAWKEYBOARD& keyboard) {
   const bool key_down = (keyboard.Flags & RI_KEY_BREAK) == 0;
   UpdateModifierState(vk, key_down);
 
+  if (IsSyntheticCopySessionActive()) {
+    return;
+  }
+
   if (!key_down) {
     return;
   }
+
+  last_real_keyboard_input_tick_ = NowTick();
 
   const auto config = CurrentConfig();
 
@@ -1531,8 +1849,10 @@ void NativeHelperApp::HandleRecordingRawKeyboard(const RAWKEYBOARD& keyboard) {
 }
 
 void NativeHelperApp::RegisterSelectionCandidate(const std::string& reason, const POINT& point) {
+  std::scoped_lock lock(candidate_mutex_);
   last_candidate_point_ = point;
   last_candidate_reason_ = reason;
+  last_candidate_clipboard_snapshot_ = ReadClipboardText();
   candidate_valid_until_ = NowTick() + kSelectionPendingWindowMs;
 }
 
@@ -1543,7 +1863,12 @@ void NativeHelperApp::TryManualTrigger(const std::string& reason) {
   }
 
   LogInfo("Manual selection trigger accepted. reason=" + reason);
-  ScheduleSelection(reason, last_candidate_point_, 0);
+  POINT candidate_point {};
+  {
+    std::scoped_lock lock(candidate_mutex_);
+    candidate_point = last_candidate_point_;
+  }
+  ScheduleSelection(reason, candidate_point, 0);
 }
 
 void NativeHelperApp::ScheduleSelection(const std::string& reason, const POINT& point, DWORD delay_ms) {
@@ -1605,6 +1930,17 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   diagnostics.class_name = WideToUtf8(foreground.class_name);
   diagnostics.blocked_risk_category.clear();
   diagnostics.blocked_risk_signal.clear();
+  diagnostics.attempted_strategies.clear();
+  diagnostics.capture_source.clear();
+  diagnostics.focus_kind = "unknown";
+  diagnostics.copy_shortcut_tried = false;
+  diagnostics.copy_shortcut_name.clear();
+  diagnostics.shortcut_guard_passed = false;
+  diagnostics.shortcut_skip_reason.clear();
+  diagnostics.clipboard_changed = false;
+  diagnostics.clipboard_restored = false;
+  diagnostics.resolved_region = foreground.window_rect;
+  diagnostics.has_resolved_region = foreground.hwnd != nullptr;
   LogInfo(
     "Processing selection. reason=" + payload.reason +
     ", process=" + diagnostics.process_name +
@@ -1623,11 +1959,18 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   }
 
   SelectionResult result;
+  diagnostics.attempted_strategies.push_back("uia");
 
   if (TryGetSelectionViaUIAutomation(&result, payload.point, foreground.hwnd)) {
     diagnostics.last_strategy = result.strategy;
+    diagnostics.capture_source = result.capture_source.empty() ? result.strategy : result.capture_source;
+    diagnostics.focus_kind = result.focus_kind;
     diagnostics.last_error.clear();
     diagnostics.selection_length = static_cast<int>(result.text.size());
+    if (result.has_anchor_rect) {
+      diagnostics.resolved_region = result.anchor_rect;
+      diagnostics.has_resolved_region = true;
+    }
     UpdateDiagnostics(diagnostics);
     LogInfo(
       "Selection read succeeded via UI Automation. length=" + std::to_string(diagnostics.selection_length)
@@ -1637,10 +1980,21 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
     return;
   }
 
+  if (result.focus_kind != "unknown") {
+    diagnostics.focus_kind = result.focus_kind;
+  }
+
+  diagnostics.attempted_strategies.push_back("legacy");
   if (TryGetSelectionViaLegacyAccessibility(&result, foreground.hwnd)) {
     diagnostics.last_strategy = result.strategy;
+    diagnostics.capture_source = result.capture_source.empty() ? result.strategy : result.capture_source;
+    diagnostics.focus_kind = result.focus_kind;
     diagnostics.last_error.clear();
     diagnostics.selection_length = static_cast<int>(result.text.size());
+    if (result.has_anchor_rect) {
+      diagnostics.resolved_region = result.anchor_rect;
+      diagnostics.has_resolved_region = true;
+    }
     UpdateDiagnostics(diagnostics);
     LogInfo(
       "Selection read succeeded via legacy accessibility. length=" + std::to_string(diagnostics.selection_length)
@@ -1650,15 +2004,57 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
     return;
   }
 
-  const SelectionConfig config = CurrentConfig();
+  if (result.focus_kind != "unknown") {
+    diagnostics.focus_kind = result.focus_kind;
+  }
 
-  if (config.copy_fallback_enabled && TryGetSelectionViaCopyFallback(&result)) {
+  std::optional<ClipboardTextSnapshot> candidate_clipboard_snapshot;
+  {
+    std::scoped_lock lock(candidate_mutex_);
+    candidate_clipboard_snapshot = last_candidate_clipboard_snapshot_;
+  }
+
+  const bool should_observe_clipboard =
+    diagnostics.focus_kind == "terminal" ||
+    foreground.process_name == "code.exe" ||
+    foreground.process_name == "cursor.exe";
+
+  if (should_observe_clipboard) {
+    diagnostics.attempted_strategies.push_back("clipboard-observe");
+    if (TryObserveClipboardSelection(&result, foreground, candidate_clipboard_snapshot, &diagnostics)) {
+      diagnostics.last_strategy = result.strategy;
+      diagnostics.capture_source = result.capture_source.empty() ? result.strategy : result.capture_source;
+      diagnostics.focus_kind = result.focus_kind;
+      diagnostics.last_error.clear();
+      diagnostics.selection_length = static_cast<int>(result.text.size());
+      if (result.has_anchor_rect) {
+        diagnostics.resolved_region = result.anchor_rect;
+        diagnostics.has_resolved_region = true;
+      }
+      UpdateDiagnostics(diagnostics);
+      LogInfo(
+        "Selection read succeeded via clipboard observe fallback. length=" + std::to_string(diagnostics.selection_length)
+      );
+      SendSelectionFound(result, payload.point, diagnostics);
+      candidate_valid_until_ = 0;
+      return;
+    }
+  }
+
+  diagnostics.attempted_strategies.push_back("clipboard-shortcut");
+  if (TryGetSelectionViaShortcutFallback(&result, foreground, payload, &diagnostics)) {
     diagnostics.last_strategy = result.strategy;
+    diagnostics.capture_source = result.capture_source.empty() ? result.strategy : result.capture_source;
+    diagnostics.focus_kind = result.focus_kind;
     diagnostics.last_error.clear();
     diagnostics.selection_length = static_cast<int>(result.text.size());
+    if (result.has_anchor_rect) {
+      diagnostics.resolved_region = result.anchor_rect;
+      diagnostics.has_resolved_region = true;
+    }
     UpdateDiagnostics(diagnostics);
     LogInfo(
-      "Selection read succeeded via copy fallback. length=" + std::to_string(diagnostics.selection_length)
+      "Selection read succeeded via clipboard shortcut fallback. length=" + std::to_string(diagnostics.selection_length)
     );
     SendSelectionFound(result, payload.point, diagnostics);
     candidate_valid_until_ = 0;
@@ -1666,7 +2062,13 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   }
 
   diagnostics.last_strategy.clear();
-  diagnostics.last_error = "No readable selection text was found.";
+  diagnostics.capture_source.clear();
+  diagnostics.last_error =
+    !diagnostics.shortcut_skip_reason.empty()
+      ? diagnostics.shortcut_skip_reason
+      : diagnostics.copy_shortcut_tried
+        ? "Shortcut copy fallback did not produce readable text."
+        : "No readable selection text was found through native accessibility APIs.";
   diagnostics.selection_length = 0;
   UpdateDiagnostics(diagnostics);
   LogWarn("Selection read failed after all strategies.");
@@ -1905,6 +2307,7 @@ bool NativeHelperApp::TryGetSelectionViaLegacyAccessibility(SelectionResult* res
     GetWindowRect(focus_hwnd, &result->anchor_rect);
     result->has_anchor_rect = true;
     result->strategy = "msaa";
+    result->capture_source = "msaa";
     return true;
   }
 
@@ -1950,54 +2353,168 @@ bool NativeHelperApp::TryGetSelectionViaLegacyAccessibility(SelectionResult* res
   GetWindowRect(focus_hwnd, &result->anchor_rect);
   result->has_anchor_rect = true;
   result->strategy = "legacy";
+  result->capture_source = "win32";
   return true;
 }
 
-bool NativeHelperApp::TryGetSelectionViaCopyFallback(SelectionResult* result) const {
+bool NativeHelperApp::TryObserveClipboardSelection(
+  SelectionResult* result,
+  const ForegroundInfo& foreground,
+  const std::optional<ClipboardTextSnapshot>& baseline_snapshot,
+  DiagnosticsSnapshot* diagnostics
+) const {
+  if (!result || !baseline_snapshot.has_value()) {
+    return false;
+  }
+
+  const int effective_timeout_ms = std::max(kClipboardObservePollMs, kClipboardObserveTimeoutMs);
+  const int effective_poll_ms = std::max(10, kClipboardObservePollMs);
+  const DWORD baseline_sequence = baseline_snapshot->sequence_number();
+
+  for (int waited = 0; waited <= effective_timeout_ms; waited += effective_poll_ms) {
+    if (GetClipboardSequenceNumber() != baseline_sequence) {
+      const auto current = ReadClipboardText();
+
+      if (!current.has_value()) {
+        Sleep(effective_poll_ms);
+        continue;
+      }
+
+      const std::wstring trimmed_text = TrimWide(current->text());
+
+      if (diagnostics != nullptr) {
+        diagnostics->clipboard_changed = true;
+        diagnostics->clipboard_restored = RestoreClipboardText(*baseline_snapshot);
+        if (!diagnostics->clipboard_restored) {
+          diagnostics->shortcut_skip_reason = "Clipboard changed during observe fallback but could not be restored.";
+        }
+      }
+
+      if (diagnostics != nullptr && diagnostics->clipboard_changed && !diagnostics->clipboard_restored) {
+        return false;
+      }
+
+      if (trimmed_text.empty()) {
+        return false;
+      }
+
+      result->text = trimmed_text;
+      result->strategy = "observe";
+      result->capture_source = "clipboard-observe";
+      result->focus_kind = diagnostics != nullptr && !diagnostics->focus_kind.empty()
+        ? diagnostics->focus_kind
+        : "unknown";
+      result->anchor_rect = foreground.window_rect;
+      result->has_anchor_rect = foreground.hwnd != nullptr;
+      return true;
+    }
+
+    if (waited < effective_timeout_ms) {
+      if (!IsForegroundStable(foreground)) {
+        break;
+      }
+      Sleep(effective_poll_ms);
+    }
+  }
+
+  return false;
+}
+
+bool NativeHelperApp::TryGetSelectionViaShortcutFallback(
+  SelectionResult* result,
+  const ForegroundInfo& foreground,
+  const TriggerPayload& payload,
+  DiagnosticsSnapshot* diagnostics
+) const {
+  if (!result || !diagnostics || !IsShortcutCopyAllowed(foreground)) {
+    return false;
+  }
+
+  diagnostics->focus_kind = ResolveShortcutFocusKind(foreground, diagnostics->focus_kind);
+
+  if (!GuardShortcutCopy(foreground, payload, diagnostics)) {
+    return false;
+  }
+
   const auto snapshot = ReadClipboardText();
-  std::string error;
-  const auto copied = ReadClipboardTextAfterHotkey({"ctrl", "c"}, kCopyFallbackTimeoutMs, kCopyFallbackPollMs, &error);
+  const auto attempts = BuildShortcutCopyAttempts(foreground, diagnostics->focus_kind);
 
-  if (snapshot.has_value()) {
-    WriteClipboardText(snapshot->text());
+  if (attempts.empty()) {
+    diagnostics->shortcut_skip_reason = "No copy shortcut is configured for the focused application.";
+    return false;
   }
 
-  if (!copied.has_value()) {
-    LogWarn(
-      error.empty()
-        ? "Copy fallback did not observe a new clipboard value after Ctrl+C."
-        : error
+  for (const auto& keys : attempts) {
+    diagnostics->copy_shortcut_tried = true;
+
+    std::ostringstream chord;
+    for (std::size_t index = 0; index < keys.size(); index += 1) {
+      if (index != 0) {
+        chord << "+";
+      }
+      chord << ToLowerAscii(keys[index]);
+    }
+    diagnostics->copy_shortcut_name = chord.str();
+
+    LogInfo("Attempting shortcut copy. keys=" + diagnostics->copy_shortcut_name);
+    std::string error;
+    const auto copied = ReadClipboardTextAfterShortcut(
+      keys,
+      kShortcutCopyTimeoutMs,
+      kShortcutCopyPollMs,
+      &error
     );
-    return false;
+
+    if (!copied.has_value()) {
+      if (!error.empty()) {
+        LogWarn(error);
+      }
+      continue;
+    }
+
+    diagnostics->clipboard_changed = true;
+    const std::wstring trimmed_text = TrimWide(copied->text());
+
+    if (snapshot.has_value()) {
+      diagnostics->clipboard_restored = RestoreClipboardText(*snapshot);
+      if (!diagnostics->clipboard_restored) {
+        diagnostics->shortcut_skip_reason = "Clipboard changed during shortcut fallback but could not be restored.";
+        return false;
+      }
+    }
+
+    if (trimmed_text.empty()) {
+      LogWarn("Shortcut copy changed the clipboard but did not yield readable text.");
+      continue;
+    }
+
+    result->text = trimmed_text;
+    result->strategy = diagnostics->copy_shortcut_name == "ctrl+shift+c" ? "ctrl-shift-c" : "ctrl-c";
+    result->capture_source = "clipboard-shortcut";
+    result->focus_kind = diagnostics->focus_kind;
+    result->anchor_rect = foreground.window_rect;
+    result->has_anchor_rect = foreground.hwnd != nullptr;
+    return true;
   }
 
-  result->text = TrimWide(copied->text());
-
-  if (result->text.empty()) {
-    LogWarn("Copy fallback returned empty text after trimming.");
-    return false;
-  }
-
-  result->strategy = "copy-fallback";
-  result->has_anchor_rect = false;
-  return true;
+  return false;
 }
 
-std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardTextAfterHotkey(
+std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardTextAfterShortcut(
   const std::vector<std::string>& keys,
   int timeout_ms,
   int poll_ms,
   std::string* error
 ) const {
-  const std::vector<std::string> effective_keys =
-    keys.empty() ? std::vector<std::string> {"ctrl", "c"} : keys;
-  const int effective_timeout_ms = std::max(kCopyFallbackPollMs, timeout_ms);
+  const int effective_timeout_ms = std::max(kShortcutCopyPollMs, timeout_ms);
   const int effective_poll_ms = std::max(10, poll_ms);
   const DWORD clipboard_sequence_before_copy = GetClipboardSequenceNumber();
 
-  if (!SendHotkey(effective_keys)) {
+  BeginSyntheticCopySession();
+
+  if (!SendHotkey(keys)) {
     if (error != nullptr) {
-      *error = "Copy hotkey could not be sent.";
+      *error = "Synthetic shortcut copy could not send the requested key chord.";
     }
     return std::nullopt;
   }
@@ -2019,12 +2536,21 @@ std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardTextAfterHotk
   }
 
   if (error != nullptr) {
-    *error = "Copy fallback did not observe a clipboard update after the copy hotkey.";
+    std::ostringstream chord;
+    for (std::size_t index = 0; index < keys.size(); index += 1) {
+      if (index != 0) {
+        chord << "+";
+      }
+      chord << ToLowerAscii(keys[index]);
+    }
+    *error = "Shortcut copy " + chord.str() + " did not produce a clipboard update.";
   }
   return std::nullopt;
 }
 
 std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardText() const {
+  const DWORD sequence_number = GetClipboardSequenceNumber();
+
   if (!OpenClipboard(nullptr)) {
     return std::nullopt;
   }
@@ -2034,15 +2560,180 @@ std::optional<ClipboardTextSnapshot> NativeHelperApp::ReadClipboardText() const 
 
   if (handle) {
     if (const auto* text = static_cast<const wchar_t*>(GlobalLock(handle))) {
-      snapshot = ClipboardTextSnapshot(text);
+      snapshot = ClipboardTextSnapshot(text, sequence_number, true);
       GlobalUnlock(handle);
     }
-  } else {
-    snapshot = ClipboardTextSnapshot(L"");
+  } else if (IsClipboardFormatAvailable(CF_UNICODETEXT) == FALSE) {
+    snapshot = ClipboardTextSnapshot(L"", sequence_number, false);
   }
 
   CloseClipboard();
   return snapshot;
+}
+
+bool NativeHelperApp::RestoreClipboardText(const ClipboardTextSnapshot& snapshot) const {
+  if (!snapshot.has_text()) {
+    return false;
+  }
+
+  return WriteClipboardText(snapshot.text());
+}
+
+bool NativeHelperApp::IsForegroundStable(const ForegroundInfo& expected) const {
+  const ForegroundInfo current = GetForegroundInfo();
+  return current.hwnd == expected.hwnd &&
+    current.process_id == expected.process_id &&
+    current.process_name == expected.process_name &&
+    current.window_title == expected.window_title;
+}
+
+std::string NativeHelperApp::ResolveShortcutFocusKind(
+  const ForegroundInfo& foreground,
+  const std::string& current_focus_kind
+) const {
+  if (current_focus_kind == "editor" || current_focus_kind == "terminal") {
+    return current_focus_kind;
+  }
+
+  if (foreground.process_name == "code.exe" || foreground.process_name == "cursor.exe") {
+    const std::string title = ToLowerAscii(WideToUtf8(foreground.window_title));
+    if (title.find("terminal") != std::string::npos) {
+      return "terminal";
+    }
+    return "editor";
+  }
+
+  return current_focus_kind.empty() ? "unknown" : current_focus_kind;
+}
+
+std::vector<std::vector<std::string>> NativeHelperApp::BuildShortcutCopyAttempts(
+  const ForegroundInfo& foreground,
+  const std::string& focus_kind
+) const {
+  if (focus_kind == "terminal") {
+    return {{"ctrl", "shift", "c"}};
+  }
+
+  if (focus_kind == "editor") {
+    return {{"ctrl", "c"}};
+  }
+
+  if (foreground.process_name == "code.exe" || foreground.process_name == "cursor.exe") {
+    return {{"ctrl", "c"}};
+  }
+
+  return {{"ctrl", "c"}};
+}
+
+bool NativeHelperApp::IsShortcutCopyAllowed(const ForegroundInfo& foreground) const {
+  const SelectionConfig config = CurrentConfig();
+  const std::string normalized_path = NormalizeWindowsPath(foreground.process_path);
+  const std::string normalized_process_name = ToLowerAscii(foreground.process_name);
+  const auto contains = [](const std::vector<std::string>& values, const std::string& needle) {
+    return !needle.empty() && std::find(values.begin(), values.end(), needle) != values.end();
+  };
+
+  if (contains(config.skip_copy_exe_paths, normalized_path) ||
+      contains(config.skip_copy_processes, normalized_process_name)) {
+    LogInfo("Shortcut copy fallback skipped by process rule. process=" + normalized_process_name);
+    return false;
+  }
+
+  if (contains(config.force_shortcut_copy_exe_paths, normalized_path) ||
+      contains(config.force_shortcut_copy_processes, normalized_process_name)) {
+    return true;
+  }
+
+  if (!config.copy_fallback_enabled) {
+    LogInfo("Shortcut copy fallback disabled globally.");
+    return false;
+  }
+
+  return true;
+}
+
+bool NativeHelperApp::GuardShortcutCopy(
+  const ForegroundInfo& foreground,
+  const TriggerPayload& payload,
+  DiagnosticsSnapshot* diagnostics
+) const {
+  if (!diagnostics) {
+    return false;
+  }
+
+  diagnostics->shortcut_guard_passed = false;
+  diagnostics->shortcut_skip_reason.clear();
+
+  if (payload.reason != "mouse-drag" && payload.reason != "mouse-multiclick") {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback only runs for mouse drag or double-click selection.";
+    return false;
+  }
+
+  const ULONGLONG now = NowTick();
+  if (candidate_valid_until_ == 0 || now > candidate_valid_until_) {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback skipped because the selection candidate expired.";
+    return false;
+  }
+
+  const ULONGLONG last_pointer_up = last_pointer_up_tick_.load();
+  if (last_pointer_up == 0 || now - last_pointer_up > static_cast<ULONGLONG>(kShortcutCopyGuardWindowMs)) {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback skipped because the mouse release is no longer fresh.";
+    return false;
+  }
+
+  if (!IsForegroundStable(foreground)) {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback skipped because the foreground window changed.";
+    return false;
+  }
+
+  if (!AreMouseButtonsReleased()) {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback skipped because a mouse button is still pressed.";
+    return false;
+  }
+
+  if (!AreModifierKeysReleased()) {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback skipped because a modifier key is physically pressed.";
+    return false;
+  }
+
+  const ULONGLONG last_keyboard_tick = last_real_keyboard_input_tick_.load();
+  if (last_keyboard_tick != 0 && now - last_keyboard_tick <= static_cast<ULONGLONG>(kRecentKeyboardGuardMs)) {
+    diagnostics->shortcut_skip_reason = "Shortcut copy fallback skipped because recent keyboard input was detected.";
+    return false;
+  }
+
+  diagnostics->shortcut_guard_passed = true;
+  return true;
+}
+
+bool NativeHelperApp::AreModifierKeysReleased() const {
+  return (GetAsyncKeyState(VK_CONTROL) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_LCONTROL) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_RCONTROL) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_SHIFT) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_LSHIFT) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_RSHIFT) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_MENU) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_LMENU) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_RMENU) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_LWIN) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_RWIN) & 0x8000) == 0;
+}
+
+bool NativeHelperApp::AreMouseButtonsReleased() const {
+  return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_MBUTTON) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_XBUTTON1) & 0x8000) == 0 &&
+    (GetAsyncKeyState(VK_XBUTTON2) & 0x8000) == 0;
+}
+
+bool NativeHelperApp::IsSyntheticCopySessionActive() const {
+  return NowTick() <= synthetic_copy_session_until_.load();
+}
+
+void NativeHelperApp::BeginSyntheticCopySession() const {
+  synthetic_copy_session_until_ = NowTick() + static_cast<ULONGLONG>(kSyntheticCopySessionMs);
 }
 
 bool NativeHelperApp::WriteClipboardText(const std::wstring& text) const {
@@ -2295,6 +2986,8 @@ void NativeHelperApp::SendSelectionFound(
   payload << "{"
           << "\"text\":" << JsonQuoteWide(result.text) << ","
           << "\"strategy\":" << JsonQuote(result.strategy) << ","
+          << "\"captureSource\":" << JsonQuote(result.capture_source.empty() ? result.strategy : result.capture_source) << ","
+          << "\"focusKind\":" << JsonQuote(result.focus_kind) << ","
           << "\"mouse\":{\"x\":" << mouse.x << ",\"y\":" << mouse.y << "},"
           << "\"anchorRect\":";
 
@@ -2343,6 +3036,15 @@ std::string NativeHelperApp::BuildDiagnosticsJson(const DiagnosticsSnapshot& dia
           << "\"connected\":" << (diagnostics.connected ? "true" : "false") << ","
           << "\"helperReady\":" << (diagnostics.helper_ready ? "true" : "false") << ","
           << "\"lastStrategy\":" << JsonQuote(diagnostics.last_strategy) << ","
+          << "\"attemptedStrategies\":" << BuildStringArrayJson(diagnostics.attempted_strategies) << ","
+          << "\"captureSource\":" << JsonQuote(diagnostics.capture_source) << ","
+          << "\"focusKind\":" << JsonQuote(diagnostics.focus_kind) << ","
+          << "\"copyShortcutTried\":" << (diagnostics.copy_shortcut_tried ? "true" : "false") << ","
+          << "\"copyShortcutName\":" << JsonQuote(diagnostics.copy_shortcut_name) << ","
+          << "\"shortcutGuardPassed\":" << (diagnostics.shortcut_guard_passed ? "true" : "false") << ","
+          << "\"shortcutSkipReason\":" << JsonQuote(diagnostics.shortcut_skip_reason) << ","
+          << "\"clipboardChanged\":" << (diagnostics.clipboard_changed ? "true" : "false") << ","
+          << "\"clipboardRestored\":" << (diagnostics.clipboard_restored ? "true" : "false") << ","
           << "\"lastReason\":" << JsonQuote(diagnostics.last_reason) << ","
           << "\"lastError\":" << JsonQuote(diagnostics.last_error) << ","
           << "\"processName\":" << JsonQuote(diagnostics.process_name) << ","
@@ -2353,7 +3055,20 @@ std::string NativeHelperApp::BuildDiagnosticsJson(const DiagnosticsSnapshot& dia
           << "\"blockedRiskSignal\":" << JsonQuote(diagnostics.blocked_risk_signal) << ","
           << "\"selectionLength\":" << diagnostics.selection_length << ","
           << "\"lastTriggerAt\":" << diagnostics.last_trigger_at << ","
-          << "\"helperWorkingSetBytes\":" << diagnostics.helper_working_set_bytes << ","
+          << "\"resolvedRegion\":";
+
+  if (diagnostics.has_resolved_region) {
+    payload << "{"
+            << "\"left\":" << diagnostics.resolved_region.left << ","
+            << "\"top\":" << diagnostics.resolved_region.top << ","
+            << "\"right\":" << diagnostics.resolved_region.right << ","
+            << "\"bottom\":" << diagnostics.resolved_region.bottom
+            << "},";
+  } else {
+    payload << "null,";
+  }
+
+  payload << "\"helperWorkingSetBytes\":" << diagnostics.helper_working_set_bytes << ","
           << "\"helperPrivateBytes\":" << diagnostics.helper_private_bytes
           << "}";
   return payload.str();

@@ -175,7 +175,7 @@ test('deepl service and deepl translation targets are removed during normalizati
   ]);
 });
 
-test('selection normalization backfills copy app rules and preserves explicit entries', () => {
+test('selection normalization preserves shortcut-copy fallback fields and migrates legacy mode names', () => {
   const normalized = __test__.normalizeConfig({
     selection: {
       copy_fallback_enabled: true,
@@ -192,11 +192,10 @@ test('selection normalization backfills copy app rules and preserves explicit en
     }
   });
 
-  assert.equal(Array.isArray(normalized.selection.copy_app_rules), true);
+  assert.equal(normalized.selection.copy_fallback_enabled, true);
   assert.equal(normalized.selection.copy_app_rules.length, 1);
-  assert.equal(normalized.selection.copy_app_rules[0].mode, 'force_copy');
-  assert.equal(normalized.selection.copy_app_rules[0].source, 'installed');
-  assert.equal(normalized.selection.copy_app_rules[0].process_name, 'reader.exe');
+  assert.equal(normalized.selection.copy_app_rules[0].mode, 'force_shortcut_copy');
+  assert.equal(normalized.selection.copy_app_rules[0].exe_path, 'c:\\program files\\pdf\\reader.exe');
 });
 
 test('selection normalization canonicalizes blacklist and whitelist process names', () => {

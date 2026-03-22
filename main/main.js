@@ -28,7 +28,7 @@ import {
 import { APP_NAME } from './defaults.js';
 import { getForegroundWindow, waitForForegroundRecovery } from './foreground.js';
 import { createDisconnectedDiagnostics, createHelperRuntimeController } from './helper-runtime-controller.js';
-import { normalizeHotkeyKeys, sendCopyShortcut, sendVsCodeCopyShortcut } from './input-sender.js';
+import { normalizeHotkeyKeys } from './input-sender.js';
 import { listInstalledApps } from './installed-apps.js';
 import { AppLogger } from './logger.js';
 import { syncLaunchOnBootRegistry } from './launch-on-boot.js';
@@ -40,13 +40,10 @@ import {
   createInternalFocusDismissHandler,
   shouldSkipSelectionRecovery
 } from './selection-foreground-guard.js';
-import { recoverSelectionForApp } from './selection-recovery.js';
 import { buildSelectionPopupFingerprint, createSelectionPopupController } from './selection-popup-controller.js';
-import { SelectionService } from './selection-service.js';
 import { normalizeHookPoint } from './selection-utils.js';
 import { SettingsWindowManager } from './settings-window.js';
 import { deepClone } from './utils.js';
-import { VsCodeSelectionRecoveryService } from './vscode-selection-recovery.js';
 
 app.disableHardwareAcceleration();
 
@@ -146,8 +143,17 @@ function createEmptyDiagnostics() {
     connected: false,
     helperReady: false,
     lastStrategy: '',
+    attemptedStrategies: [],
+    captureSource: '',
+    focusKind: 'unknown',
+    copyShortcutTried: false,
+    copyShortcutName: '',
+    shortcutGuardPassed: false,
+    shortcutSkipReason: '',
+    clipboardChanged: false,
+    clipboardRestored: false,
+    resolvedRegion: null,
     finalSelectionStrategy: '',
-    finalTextSource: '',
     lastReason: '',
     lastError: '',
     processName: '',
@@ -159,9 +165,6 @@ function createEmptyDiagnostics() {
     className: '',
     blockedRiskCategory: '',
     blockedRiskSignal: '',
-    matchedCopyRule: '',
-    requestedCopyMode: 'auto',
-    effectiveCopyMode: 'auto',
     selectionLength: 0,
     lastTriggerAt: 0,
     helperWorkingSetBytes: 0,
@@ -858,14 +861,6 @@ async function showPopupForSelection({
   return true;
 }
 
-function createMatchedRuleLabel(rule) {
-  if (!rule) {
-    return '';
-  }
-
-  return `${rule.label || rule.process_name || '兼容规则'} · ${rule.mode}`;
-}
-
 async function resolveSelectionContext(diagnostics = {}) {
   const foregroundWindow = await getForegroundWindow();
   return buildSelectionForegroundContext({
@@ -904,7 +899,7 @@ async function abortSelectionPopup({
   return false;
 }
 
-async function handleRecoveredSelection({
+async function handleHelperSelection({
   helperText = '',
   diagnostics = {},
   strategy = '',
@@ -926,26 +921,13 @@ async function handleRecoveredSelection({
     return abortSelectionPopup({
       diagnostics,
       selectionContext,
-      stage: 'before-recovery'
+      stage: 'before-selection'
     });
   }
 
-  const recovery = await recoverSelectionForApp({
-    helperText,
-    helperStrategy: strategy || diagnostics?.lastStrategy || '',
-    diagnostics,
-    processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
-    processPath: selectionContext.sourceProcessPath || diagnostics?.processPath || '',
-    hasRecentMouseAnchor: hasRecentMouseAnchor(),
-    selectionConfig: getConfig().selection,
-    selectionService,
-    vsCodeRecoveryService: vsCodeSelectionRecoveryService
-  });
-
-  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
-    return false;
-  }
-
+  let selectedText = String(helperText || '').trim();
+  let finalSelectionStrategy = strategy || diagnostics?.lastStrategy || '';
+  let resolvedAnchorRect = anchorRect;
   const mergedDiagnostics = {
     ...(diagnostics || {}),
     processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
@@ -954,13 +936,11 @@ async function handleRecoveredSelection({
     currentForegroundProcessName: selectionContext.currentProcessName || '',
     currentForegroundProcessPath: selectionContext.currentProcessPath || '',
     currentForegroundWindowTitle: selectionContext.currentWindowTitle || '',
-    matchedCopyRule: createMatchedRuleLabel(recovery.matchedRule),
-    requestedCopyMode: recovery.requestedMode,
-    effectiveCopyMode: recovery.effectiveMode,
-    finalSelectionStrategy: recovery.finalSelectionStrategy,
-    finalTextSource: recovery.finalTextSource,
-    selectionLength: recovery.text?.length || 0,
-    lastError: recovery.ok ? '' : recovery.error || diagnostics?.lastError || ''
+    captureSource: diagnostics?.captureSource || '',
+    focusKind: diagnostics?.focusKind || 'unknown',
+    finalSelectionStrategy,
+    selectionLength: selectedText.length,
+    lastError: selectedText ? '' : diagnostics?.lastError || '没有可用的选中文本。'
   };
 
   await syncDiagnosticsSnapshot(mergedDiagnostics);
@@ -969,14 +949,12 @@ async function handleRecoveredSelection({
     return false;
   }
 
-  if (!recovery.ok || !recovery.text) {
-    appLogger.warn('selection', 'Selection recovery produced no usable text.', {
+  if (!selectedText) {
+    appLogger.warn('selection', 'Native helper produced no usable text.', {
       processName: mergedDiagnostics.processName,
       processPath: mergedDiagnostics.processPath,
-      requestedCopyMode: recovery.requestedMode,
-      effectiveCopyMode: recovery.effectiveMode,
-      finalSelectionStrategy: recovery.finalSelectionStrategy,
-      error: recovery.error || diagnostics?.lastError || ''
+      finalSelectionStrategy: mergedDiagnostics.finalSelectionStrategy,
+      error: mergedDiagnostics.lastError || ''
     });
     return false;
   }
@@ -1001,18 +979,18 @@ async function handleRecoveredSelection({
 
   const fingerprint = buildSelectionPopupFingerprint({
     diagnostics: mergedDiagnostics,
-    selectedText: recovery.text,
+    selectedText,
     processName: mergedDiagnostics.processName,
     processPath: mergedDiagnostics.processPath
   });
 
   return showPopupForSelection({
-    selectedText: recovery.text,
+    selectedText,
     tools: getEnabledTools(),
     diagnostics: mergedDiagnostics,
-    strategy: recovery.finalSelectionStrategy,
+    strategy: mergedDiagnostics.finalSelectionStrategy,
     mouse,
-    anchorRect,
+    anchorRect: resolvedAnchorRect,
     flowId,
     fingerprint
   });
@@ -1084,23 +1062,6 @@ const settingsWindowManager = new SettingsWindowManager(
 const nativeClient = new NativeClient({
   appPid: process.pid,
   logger: appLogger.child('native-helper')
-});
-const selectionService = new SelectionService({
-  sendCopyShortcut,
-  readClipboardTextAfterCopyImpl: ({ keys, timeoutMs, pollMs }) =>
-    nativeClient.readClipboardTextAfterCopy({
-      keys,
-      timeoutMs,
-      pollMs
-    }),
-  logger: appLogger.child('selection-service')
-});
-const vsCodeSelectionRecoveryService = new VsCodeSelectionRecoveryService({
-  selectionService,
-  sendTerminalCopyShortcut: sendVsCodeCopyShortcut,
-  sendEditorCopyShortcut: sendCopyShortcut,
-  waitForForegroundRecovery,
-  logger: appLogger.child('vscode-selection')
 });
 const helperRuntime = createHelperRuntimeController({
   nativeClient,
@@ -1174,7 +1135,6 @@ async function commitConfig(
   if (successLogContext) {
     appLogger.info(successLogContext, 'Configuration saved.', {
       selectionMode: config.selection.mode,
-      copyFallbackEnabled: config.selection.copy_fallback_enabled,
       loggingEnabled: config.logging?.enabled === true,
       launchOnBoot: config.startup?.launch_on_boot === true,
       webDavEnabled: config.sync?.webdav?.enabled === true
@@ -1694,7 +1654,7 @@ function registerNativeEvents() {
     }
     const flowId = selectionPopupController.beginFlow();
     try {
-      await handleRecoveredSelection({
+      await handleHelperSelection({
         helperText: payload.text,
         diagnostics,
         strategy: payload.strategy || diagnostics?.lastStrategy || '',
@@ -1738,7 +1698,7 @@ function registerNativeEvents() {
     }
     const flowId = selectionPopupController.beginFlow();
     appLogger.warn('selection', 'Selection read failed.', diagnostics);
-    void handleRecoveredSelection({
+    void handleHelperSelection({
       helperText: '',
       diagnostics,
       strategy: diagnostics?.lastStrategy || '',
@@ -1746,7 +1706,7 @@ function registerNativeEvents() {
       anchorRect: null,
       flowId
     }).catch((error) => {
-      appLogger.error('selection', 'Selection recovery after helper failure failed.', error);
+      appLogger.error('selection', 'Selection handling after helper failure failed.', error);
     });
   });
 }

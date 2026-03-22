@@ -20,14 +20,13 @@ import {
 import { TOOL_TYPE_DEFAULT_ICONS, normalizeIconName } from '../shared/icons.js';
 import { deriveUrlToolFaviconMeta } from '../shared/url-tool.js';
 import { coerceArray, createId, deepClone } from './utils.js';
-import {
-  canonicalizeExePath,
-  COPY_APP_RULE_MODES,
-  COPY_APP_RULE_SOURCES,
-  inferProcessNameFromExePath,
-  normalizeExePath
-} from './copy-app-rules.js';
 import { normalizeProcessList } from '../shared/process-name.js';
+import {
+  normalizeCopyAppRuleMode,
+  normalizeCopyAppRuleSource,
+  normalizeExePath,
+  normalizeProcessName
+} from './copy-app-rules.js';
 
 let store;
 
@@ -377,25 +376,6 @@ function normalizeSelection(selection = {}, configVersion = 0) {
     .filter(Boolean);
   const blacklistExes = normalizeProcessList(coerceArray(selection?.blacklist_exes));
   const whitelistExes = normalizeProcessList(coerceArray(selection?.whitelist_exes));
-  const copyAppRules = coerceArray(selection?.copy_app_rules)
-    .map((rule) => {
-      const exePath = canonicalizeExePath(rule?.exe_path || '');
-
-      if (!exePath) {
-        return null;
-      }
-
-      return {
-        id: String(rule?.id || createId('copy-rule')).trim() || createId('copy-rule'),
-        label: String(rule?.label || '').trim() || inferProcessNameFromExePath(exePath) || '未命名程序',
-        enabled: rule?.enabled !== false,
-        mode: COPY_APP_RULE_MODES.includes(rule?.mode) ? rule.mode : 'auto',
-        exe_path: exePath,
-        process_name: String(rule?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(exePath),
-        source: COPY_APP_RULE_SOURCES.includes(rule?.source) ? rule.source : 'manual'
-      };
-    })
-    .filter(Boolean);
   const hardDisabledCategories = coerceArray(selection?.hard_disabled_categories)
     .map((value) => String(value).trim())
     .filter((value) => HARD_DISABLED_CATEGORIES.includes(value));
@@ -407,15 +387,34 @@ function normalizeSelection(selection = {}, configVersion = 0) {
   const hasToolbarOffsetY = Number.isFinite(rawToolbarOffsetY);
   const migratedLegacyToolbarOffset =
     configVersion < 7 && hasToolbarOffsetX && hasToolbarOffsetY && rawToolbarOffsetX === 0 && rawToolbarOffsetY === -6;
+  const normalizedCopyRules = coerceArray(selection?.copy_app_rules)
+    .map((rule) => {
+      const exePath = normalizeExePath(rule?.exe_path || '');
+      const processName = normalizeProcessName(rule?.process_name || '', exePath);
+
+      if (!exePath && !processName) {
+        return null;
+      }
+
+      return {
+        id: String(rule?.id || createId('copy-rule')),
+        label: String(rule?.label || '').trim() || processName || exePath || '未命名程序',
+        enabled: rule?.enabled !== false,
+        mode: normalizeCopyAppRuleMode(rule?.mode),
+        exe_path: exePath,
+        process_name: processName,
+        source: normalizeCopyAppRuleSource(rule?.source)
+      };
+    })
+    .filter(Boolean);
 
   return {
     mode,
     auxiliary_hotkey: auxiliaryHotkey,
+    copy_fallback_enabled: selection?.copy_fallback_enabled !== false,
+    copy_app_rules: normalizedCopyRules,
     blacklist_exes: blacklistExes,
     whitelist_exes: whitelistExes,
-    copy_app_rules: Array.from(
-      new Map(copyAppRules.map((rule) => [normalizeExePath(rule.exe_path), rule])).values()
-    ),
     hard_disabled_categories:
       Array.isArray(selection?.hard_disabled_categories)
         ? Array.from(new Set(hardDisabledCategories))
@@ -435,7 +434,6 @@ function normalizeSelection(selection = {}, configVersion = 0) {
         ? Math.max(0, Math.round(rawToolbarAutoHideSeconds))
         : 0,
     proxy: normalizeProxy(selection?.proxy, { fallbackMode: defaults.proxy?.mode || 'system' }),
-    copy_fallback_enabled: configVersion < 3 ? true : selection?.copy_fallback_enabled !== false,
     diagnostics_enabled: selection?.diagnostics_enabled !== false
   };
 }
