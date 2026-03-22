@@ -19,6 +19,7 @@ import {
 } from './defaults.js';
 import { TOOL_TYPE_DEFAULT_ICONS, normalizeIconName } from '../shared/icons.js';
 import { deriveUrlToolFaviconMeta } from '../shared/url-tool.js';
+import { normalizeToolbarScalePercent, normalizeToolbarSizePreset } from '../shared/toolbar-metrics.js';
 import { coerceArray, createId, deepClone } from './utils.js';
 import { normalizeProcessList } from '../shared/process-name.js';
 import {
@@ -382,6 +383,8 @@ function normalizeSelection(selection = {}, configVersion = 0) {
 
   const rawToolbarOffsetX = Number(selection?.toolbar_offset?.x);
   const rawToolbarOffsetY = Number(selection?.toolbar_offset?.y);
+  const toolbarSizePreset = normalizeToolbarSizePreset(selection?.toolbar_size_preset);
+  const toolbarScalePercent = normalizeToolbarScalePercent(selection?.toolbar_scale_percent, toolbarSizePreset);
   const rawToolbarAutoHideSeconds = Number(selection?.toolbar_auto_hide_seconds);
   const hasToolbarOffsetX = Number.isFinite(rawToolbarOffsetX);
   const hasToolbarOffsetY = Number.isFinite(rawToolbarOffsetY);
@@ -429,6 +432,8 @@ function normalizeSelection(selection = {}, configVersion = 0) {
           ? rawToolbarOffsetY
         : defaults.toolbar_offset.y
     },
+    toolbar_size_preset: toolbarSizePreset,
+    toolbar_scale_percent: toolbarScalePercent,
     toolbar_auto_hide_seconds:
       Number.isFinite(rawToolbarAutoHideSeconds) && rawToolbarAutoHideSeconds > 0
         ? Math.max(0, Math.round(rawToolbarAutoHideSeconds))

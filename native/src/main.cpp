@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -33,17 +34,21 @@ constexpr UINT WM_APP_TRIGGER_SELECTION = WM_APP + 101;
 constexpr UINT WM_APP_START_RECORD = WM_APP + 102;
 constexpr UINT WM_APP_STOP_RECORD = WM_APP + 103;
 
-constexpr int kSelectionDelayMs = 150;
+constexpr int kSelectionDragDelayMs = 85;
+constexpr int kSelectionMulticlickDelayMs = 45;
+constexpr int kSelectionAdaptiveDelayMs = 130;
+constexpr int kSelectionAdaptiveMulticlickDelayMs = 80;
 constexpr int kSelectionCooldownMs = 220;
 constexpr int kSelectionPendingWindowMs = 1500;
 constexpr int kSelectionDragThresholdPx = 6;
-constexpr int kClipboardObserveTimeoutMs = 160;
+constexpr int kClipboardObserveTimeoutMs = 80;
 constexpr int kClipboardObservePollMs = 20;
 constexpr int kShortcutCopyTimeoutMs = 450;
 constexpr int kShortcutCopyPollMs = 25;
 constexpr int kShortcutCopyGuardWindowMs = 900;
 constexpr int kRecentKeyboardGuardMs = 220;
 constexpr int kSyntheticCopySessionMs = 320;
+constexpr int kProcessSelectionHintLifetimeMs = 120000;
 constexpr int kUiAutomationAncestorDepth = 6;
 constexpr int kUiAutomationDescendantLimit = 48;
 
@@ -607,6 +612,9 @@ struct DiagnosticsSnapshot {
   std::string shortcut_skip_reason;
   bool clipboard_changed = false;
   bool clipboard_restored = false;
+  bool guard_evaluated = false;
+  std::string guard_rejected_reason;
+  std::string fallback_stage = "none";
   RECT resolved_region {};
   bool has_resolved_region = false;
   std::string last_reason;
@@ -618,6 +626,10 @@ struct DiagnosticsSnapshot {
   std::string blocked_risk_category;
   std::string blocked_risk_signal;
   int selection_length = 0;
+  unsigned long long source_process_id = 0;
+  unsigned long long source_hwnd = 0;
+  unsigned long long captured_at_tick = 0;
+  unsigned long long native_latency_ms = 0;
   unsigned long long last_trigger_at = 0;
   unsigned long long helper_working_set_bytes = 0;
   unsigned long long helper_private_bytes = 0;
@@ -1322,6 +1334,9 @@ class NativeHelperApp {
   bool RestoreClipboardText(const ClipboardTextSnapshot& snapshot) const;
   bool IsForegroundStable(const ForegroundInfo& expected) const;
   std::string ResolveShortcutFocusKind(const ForegroundInfo& foreground, const std::string& current_focus_kind) const;
+  DWORD DetermineSelectionDelayMs(const std::string& reason) const;
+  void NoteProcessSelectionHint(const ForegroundInfo& foreground, const SelectionResult& result);
+  bool HasProcessSelectionHint(const std::string& process_name) const;
   std::vector<std::vector<std::string>> BuildShortcutCopyAttempts(
     const ForegroundInfo& foreground,
     const std::string& focus_kind
@@ -1368,6 +1383,7 @@ class NativeHelperApp {
   mutable std::mutex config_mutex_;
   mutable std::mutex diagnostics_mutex_;
   mutable std::mutex candidate_mutex_;
+  mutable std::mutex process_hint_mutex_;
   mutable std::vector<std::uint8_t> raw_input_buffer_;
   std::atomic<bool> running_ {true};
   std::atomic<bool> selection_busy_ {false};
@@ -1384,6 +1400,7 @@ class NativeHelperApp {
   std::atomic<ULONGLONG> last_pointer_up_tick_ {0};
   std::atomic<ULONGLONG> last_real_keyboard_input_tick_ {0};
   mutable std::atomic<ULONGLONG> synthetic_copy_session_until_ {0};
+  mutable std::map<std::string, ULONGLONG> process_selection_hints_;
   bool recording_active_ = false;
   int recording_request_id_ = 0;
   UINT recording_main_vk_ = 0;
@@ -1746,7 +1763,7 @@ void NativeHelperApp::HandleMouseInput(const RAWMOUSE& mouse) {
       );
 
       if (CurrentConfig().mode == "auto") {
-        ScheduleSelection(reason, cursor, kSelectionDelayMs);
+        ScheduleSelection(reason, cursor, DetermineSelectionDelayMs(reason));
       }
     }
 
@@ -1924,10 +1941,13 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   DiagnosticsSnapshot diagnostics = SnapshotDiagnostics();
   diagnostics.last_reason = payload.reason;
   diagnostics.last_trigger_at = NowTick();
+  diagnostics.captured_at_tick = diagnostics.last_trigger_at;
   diagnostics.process_name = foreground.process_name;
   diagnostics.process_path = foreground.process_path;
   diagnostics.window_title = WideToUtf8(foreground.window_title);
   diagnostics.class_name = WideToUtf8(foreground.class_name);
+  diagnostics.source_process_id = foreground.process_id;
+  diagnostics.source_hwnd = reinterpret_cast<unsigned long long>(foreground.hwnd);
   diagnostics.blocked_risk_category.clear();
   diagnostics.blocked_risk_signal.clear();
   diagnostics.attempted_strategies.clear();
@@ -1939,6 +1959,10 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
   diagnostics.shortcut_skip_reason.clear();
   diagnostics.clipboard_changed = false;
   diagnostics.clipboard_restored = false;
+  diagnostics.guard_evaluated = false;
+  diagnostics.guard_rejected_reason.clear();
+  diagnostics.fallback_stage = "none";
+  diagnostics.native_latency_ms = 0;
   diagnostics.resolved_region = foreground.window_rect;
   diagnostics.has_resolved_region = foreground.hwnd != nullptr;
   LogInfo(
@@ -1971,6 +1995,7 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
       diagnostics.resolved_region = result.anchor_rect;
       diagnostics.has_resolved_region = true;
     }
+    diagnostics.native_latency_ms = NowTick() - diagnostics.captured_at_tick;
     UpdateDiagnostics(diagnostics);
     LogInfo(
       "Selection read succeeded via UI Automation. length=" + std::to_string(diagnostics.selection_length)
@@ -1995,6 +2020,7 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
       diagnostics.resolved_region = result.anchor_rect;
       diagnostics.has_resolved_region = true;
     }
+    diagnostics.native_latency_ms = NowTick() - diagnostics.captured_at_tick;
     UpdateDiagnostics(diagnostics);
     LogInfo(
       "Selection read succeeded via legacy accessibility. length=" + std::to_string(diagnostics.selection_length)
@@ -2031,6 +2057,8 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
         diagnostics.resolved_region = result.anchor_rect;
         diagnostics.has_resolved_region = true;
       }
+      diagnostics.native_latency_ms = NowTick() - diagnostics.captured_at_tick;
+      NoteProcessSelectionHint(foreground, result);
       UpdateDiagnostics(diagnostics);
       LogInfo(
         "Selection read succeeded via clipboard observe fallback. length=" + std::to_string(diagnostics.selection_length)
@@ -2052,6 +2080,8 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
       diagnostics.resolved_region = result.anchor_rect;
       diagnostics.has_resolved_region = true;
     }
+    diagnostics.native_latency_ms = NowTick() - diagnostics.captured_at_tick;
+    NoteProcessSelectionHint(foreground, result);
     UpdateDiagnostics(diagnostics);
     LogInfo(
       "Selection read succeeded via clipboard shortcut fallback. length=" + std::to_string(diagnostics.selection_length)
@@ -2070,6 +2100,7 @@ void NativeHelperApp::ProcessSelection(const TriggerPayload& payload) {
         ? "Shortcut copy fallback did not produce readable text."
         : "No readable selection text was found through native accessibility APIs.";
   diagnostics.selection_length = 0;
+  diagnostics.native_latency_ms = NowTick() - diagnostics.captured_at_tick;
   UpdateDiagnostics(diagnostics);
   LogWarn("Selection read failed after all strategies.");
   SendSelectionFailed(diagnostics.last_error, diagnostics);
@@ -2406,6 +2437,9 @@ bool NativeHelperApp::TryObserveClipboardSelection(
         : "unknown";
       result->anchor_rect = foreground.window_rect;
       result->has_anchor_rect = foreground.hwnd != nullptr;
+      if (diagnostics != nullptr) {
+        diagnostics->fallback_stage = "observe";
+      }
       return true;
     }
 
@@ -2431,8 +2465,10 @@ bool NativeHelperApp::TryGetSelectionViaShortcutFallback(
   }
 
   diagnostics->focus_kind = ResolveShortcutFocusKind(foreground, diagnostics->focus_kind);
+  diagnostics->guard_evaluated = true;
 
   if (!GuardShortcutCopy(foreground, payload, diagnostics)) {
+    diagnostics->guard_rejected_reason = diagnostics->shortcut_skip_reason;
     return false;
   }
 
@@ -2494,6 +2530,7 @@ bool NativeHelperApp::TryGetSelectionViaShortcutFallback(
     result->focus_kind = diagnostics->focus_kind;
     result->anchor_rect = foreground.window_rect;
     result->has_anchor_rect = foreground.hwnd != nullptr;
+    diagnostics->fallback_stage = "shortcut";
     return true;
   }
 
@@ -2604,6 +2641,56 @@ std::string NativeHelperApp::ResolveShortcutFocusKind(
   }
 
   return current_focus_kind.empty() ? "unknown" : current_focus_kind;
+}
+
+DWORD NativeHelperApp::DetermineSelectionDelayMs(const std::string& reason) const {
+  const bool is_multiclick = reason == "mouse-multiclick";
+  const DWORD base_delay = is_multiclick
+    ? static_cast<DWORD>(kSelectionMulticlickDelayMs)
+    : static_cast<DWORD>(kSelectionDragDelayMs);
+  const ForegroundInfo foreground = GetForegroundInfo();
+
+  if (!HasProcessSelectionHint(foreground.process_name)) {
+    return base_delay;
+  }
+
+  return is_multiclick
+    ? static_cast<DWORD>(kSelectionAdaptiveMulticlickDelayMs)
+    : static_cast<DWORD>(kSelectionAdaptiveDelayMs);
+}
+
+void NativeHelperApp::NoteProcessSelectionHint(const ForegroundInfo& foreground, const SelectionResult& result) {
+  if (foreground.process_name.empty()) {
+    return;
+  }
+
+  if (result.capture_source != "clipboard-observe" && result.capture_source != "clipboard-shortcut") {
+    return;
+  }
+
+  std::scoped_lock lock(process_hint_mutex_);
+  process_selection_hints_[foreground.process_name] =
+    NowTick() + static_cast<ULONGLONG>(kProcessSelectionHintLifetimeMs);
+}
+
+bool NativeHelperApp::HasProcessSelectionHint(const std::string& process_name) const {
+  if (process_name.empty()) {
+    return false;
+  }
+
+  std::scoped_lock lock(process_hint_mutex_);
+  const auto iterator = process_selection_hints_.find(process_name);
+
+  if (iterator == process_selection_hints_.end()) {
+    return false;
+  }
+
+  if (NowTick() > iterator->second) {
+    process_selection_hints_.erase(iterator);
+    return false;
+  }
+
+  return true;
 }
 
 std::vector<std::vector<std::string>> NativeHelperApp::BuildShortcutCopyAttempts(
@@ -2988,6 +3075,10 @@ void NativeHelperApp::SendSelectionFound(
           << "\"strategy\":" << JsonQuote(result.strategy) << ","
           << "\"captureSource\":" << JsonQuote(result.capture_source.empty() ? result.strategy : result.capture_source) << ","
           << "\"focusKind\":" << JsonQuote(result.focus_kind) << ","
+          << "\"sourceProcessId\":" << diagnostics.source_process_id << ","
+          << "\"sourceHwnd\":" << diagnostics.source_hwnd << ","
+          << "\"capturedAtTick\":" << diagnostics.captured_at_tick << ","
+          << "\"fallbackStage\":" << JsonQuote(diagnostics.fallback_stage) << ","
           << "\"mouse\":{\"x\":" << mouse.x << ",\"y\":" << mouse.y << "},"
           << "\"anchorRect\":";
 
@@ -3038,15 +3129,21 @@ std::string NativeHelperApp::BuildDiagnosticsJson(const DiagnosticsSnapshot& dia
           << "\"lastStrategy\":" << JsonQuote(diagnostics.last_strategy) << ","
           << "\"attemptedStrategies\":" << BuildStringArrayJson(diagnostics.attempted_strategies) << ","
           << "\"captureSource\":" << JsonQuote(diagnostics.capture_source) << ","
+          << "\"fallbackStage\":" << JsonQuote(diagnostics.fallback_stage) << ","
           << "\"focusKind\":" << JsonQuote(diagnostics.focus_kind) << ","
           << "\"copyShortcutTried\":" << (diagnostics.copy_shortcut_tried ? "true" : "false") << ","
           << "\"copyShortcutName\":" << JsonQuote(diagnostics.copy_shortcut_name) << ","
+          << "\"guardEvaluated\":" << (diagnostics.guard_evaluated ? "true" : "false") << ","
           << "\"shortcutGuardPassed\":" << (diagnostics.shortcut_guard_passed ? "true" : "false") << ","
+          << "\"guardRejectedReason\":" << JsonQuote(diagnostics.guard_rejected_reason) << ","
           << "\"shortcutSkipReason\":" << JsonQuote(diagnostics.shortcut_skip_reason) << ","
           << "\"clipboardChanged\":" << (diagnostics.clipboard_changed ? "true" : "false") << ","
           << "\"clipboardRestored\":" << (diagnostics.clipboard_restored ? "true" : "false") << ","
           << "\"lastReason\":" << JsonQuote(diagnostics.last_reason) << ","
           << "\"lastError\":" << JsonQuote(diagnostics.last_error) << ","
+          << "\"sourceProcessId\":" << diagnostics.source_process_id << ","
+          << "\"sourceHwnd\":" << diagnostics.source_hwnd << ","
+          << "\"capturedAtTick\":" << diagnostics.captured_at_tick << ","
           << "\"processName\":" << JsonQuote(diagnostics.process_name) << ","
           << "\"processPath\":" << JsonQuote(diagnostics.process_path) << ","
           << "\"windowTitle\":" << JsonQuote(diagnostics.window_title) << ","
@@ -3054,6 +3151,7 @@ std::string NativeHelperApp::BuildDiagnosticsJson(const DiagnosticsSnapshot& dia
           << "\"blockedRiskCategory\":" << JsonQuote(diagnostics.blocked_risk_category) << ","
           << "\"blockedRiskSignal\":" << JsonQuote(diagnostics.blocked_risk_signal) << ","
           << "\"selectionLength\":" << diagnostics.selection_length << ","
+          << "\"nativeLatencyMs\":" << diagnostics.native_latency_ms << ","
           << "\"lastTriggerAt\":" << diagnostics.last_trigger_at << ","
           << "\"resolvedRegion\":";
 

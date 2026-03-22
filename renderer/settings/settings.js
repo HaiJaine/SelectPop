@@ -8,6 +8,11 @@ import {
 } from '../shared/icons.js';
 import { buildUrlTemplatePreview, deriveUrlToolFaviconMeta, shouldUseUrlToolFavicon } from '../../shared/url-tool.js';
 import { canonicalizeProcessName, normalizeProcessList } from '../../shared/process-name.js';
+import {
+  getToolbarScalePercentForPreset,
+  TOOLBAR_SCALE_PERCENT_MAX,
+  TOOLBAR_SCALE_PERCENT_MIN
+} from '../../shared/toolbar-metrics.js';
 
 const TOOL_TYPE_LABELS = {
   copy: '复制工具',
@@ -98,6 +103,11 @@ const COPY_APP_RULE_MODE_OPTIONS = [
   { id: 'force_shortcut_copy', label: '强制快捷键复制' },
   { id: 'skip_copy', label: '禁止兼容复制' }
 ];
+const TOOLBAR_SIZE_PRESET_OPTIONS = [
+  { id: 'compact', label: '紧凑' },
+  { id: 'default', label: '默认' },
+  { id: 'comfortable', label: '宽松' }
+];
 
 const state = {
   config: null,
@@ -153,6 +163,7 @@ const SELECTION_DEFERRED_FIELDS = new Set([
   'blacklist_text',
   'toolbar_offset_x',
   'toolbar_offset_y',
+  'toolbar_scale_percent',
   'toolbar_auto_hide_seconds',
   'proxy_host',
   'proxy_port'
@@ -883,6 +894,8 @@ function createSelectionDraft(selection) {
     whitelist_text: formatLineList(selection.whitelist_exes),
     toolbar_offset_x: Number(selection?.toolbar_offset?.x ?? 0),
     toolbar_offset_y: Number(selection?.toolbar_offset?.y ?? 0),
+    toolbar_size_preset: String(selection?.toolbar_size_preset || 'default'),
+    toolbar_scale_percent: Number(selection?.toolbar_scale_percent ?? getToolbarScalePercentForPreset(selection?.toolbar_size_preset)),
     toolbar_auto_hide_seconds: Number(selection?.toolbar_auto_hide_seconds ?? 0),
     proxy_mode: selection?.proxy?.mode || 'system',
     proxy_type: selection?.proxy?.type || 'http',
@@ -1405,6 +1418,7 @@ function buildTranslationServicePayload(draft) {
 function buildSelectionPayload(draft) {
   const toolbarOffsetX = Number(draft.toolbar_offset_x);
   const toolbarOffsetY = Number(draft.toolbar_offset_y);
+  const toolbarScalePercent = Number(draft.toolbar_scale_percent);
   const toolbarAutoHideSeconds = Number(draft.toolbar_auto_hide_seconds);
   const payload = {
     mode: draft.mode || 'auto',
@@ -1420,6 +1434,10 @@ function buildSelectionPayload(draft) {
       x: Number.isFinite(toolbarOffsetX) ? toolbarOffsetX : 0,
       y: Number.isFinite(toolbarOffsetY) ? toolbarOffsetY : 0
     },
+    toolbar_size_preset: String(draft.toolbar_size_preset || 'default'),
+    toolbar_scale_percent: Number.isFinite(toolbarScalePercent)
+      ? Math.min(TOOLBAR_SCALE_PERCENT_MAX, Math.max(TOOLBAR_SCALE_PERCENT_MIN, Math.round(toolbarScalePercent)))
+      : getToolbarScalePercentForPreset(draft.toolbar_size_preset),
     toolbar_auto_hide_seconds:
       Number.isFinite(toolbarAutoHideSeconds) && toolbarAutoHideSeconds > 0
         ? Math.max(0, Math.round(toolbarAutoHideSeconds))
@@ -2092,6 +2110,8 @@ function renderSelectionSettings() {
     hard_disabled_categories: [],
     toolbar_offset_x: 0,
     toolbar_offset_y: 0,
+    toolbar_size_preset: 'default',
+    toolbar_scale_percent: getToolbarScalePercentForPreset('default'),
     toolbar_auto_hide_seconds: 0,
     proxy_mode: 'system',
     proxy_type: 'http',
@@ -2175,6 +2195,7 @@ function renderSelectionSettings() {
       <section class="selection-card">
         <div class="selection-card-title">原生取词</div>
         <div class="field-hint">划词阶段优先使用 UI Automation、MSAA 和 Win32 读取；兼容模式会先观察剪贴板变化，再在允许的应用中受控发送复制快捷键，并立即恢复剪贴板。</div>
+        <div class="field-hint">VS Code 快路径已启用：拖选和双击会优先走更短延迟，只有原生读取失败时才进入兼容复制。</div>
       </section>
 
       <section class="selection-card">
@@ -2190,6 +2211,7 @@ function renderSelectionSettings() {
           </label>
         </div>
         <div class="field-hint">兼容模式会短暂备份并恢复剪贴板；原生读取失败时，会只在允许的应用中发送受控的 <code>Ctrl+C</code> 或 <code>Ctrl+Shift+C</code>。内置默认策略会优先照顾 VS Code / Cursor，并默认跳过 JetBrains 系列。</div>
+        <div class="field-hint">兼容复制仅在 guard 通过时触发；如果窗口切换、鼠标未释放、或你正在按住修饰键，helper 会直接放弃发键。</div>
         <div class="selection-inline">
           <button class="inline-button" type="button" data-action="add-copy-rule-installed">从系统软件添加规则</button>
           <button class="inline-button" type="button" data-action="add-copy-rule-manual">手动添加规则</button>
@@ -2226,6 +2248,31 @@ function renderSelectionSettings() {
             />
             <div class="field-hint">正值向下，负值向上；以鼠标右下方为基准微调。</div>
           </div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="toolbar-size-preset">工具条大小</label>
+          <select
+            id="toolbar-size-preset"
+            data-selection-field="toolbar_size_preset"
+          >
+            ${TOOLBAR_SIZE_PRESET_OPTIONS.map((option) => `
+              <option value="${option.id}" ${draft.toolbar_size_preset === option.id ? 'selected' : ''}>${option.label}</option>
+            `).join('')}
+          </select>
+          <div class="field-hint">预设用于快速切换，百分比用于精细微调。</div>
+        </div>
+        <div class="field">
+          <label class="field-label" for="toolbar-scale-percent">工具条缩放(%)</label>
+          <input
+            id="toolbar-scale-percent"
+            type="number"
+            min="${TOOLBAR_SCALE_PERCENT_MIN}"
+            max="${TOOLBAR_SCALE_PERCENT_MAX}"
+            step="1"
+            data-selection-field="toolbar_scale_percent"
+            value="${escapeHtml(draft.toolbar_scale_percent ?? getToolbarScalePercentForPreset(draft.toolbar_size_preset))}"
+          />
+          <div class="field-hint">范围 ${TOOLBAR_SCALE_PERCENT_MIN}-${TOOLBAR_SCALE_PERCENT_MAX}，默认档会比旧版更紧凑。</div>
         </div>
         <div class="field">
           <label class="field-label" for="toolbar-auto-hide-seconds">自动消失时间(秒)</label>
@@ -2378,11 +2425,17 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>最近策略</span><strong>${escapeHtml(diagnostics.lastStrategy || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最终策略</span><strong>${escapeHtml(diagnostics.finalSelectionStrategy || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>捕获来源</span><strong>${escapeHtml(diagnostics.captureSource || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>Fallback 阶段</span><strong>${escapeHtml(diagnostics.fallbackStage || 'none')}</strong></div>
           <div class="diagnostics-row"><span>焦点类型</span><strong>${escapeHtml(diagnostics.focusKind || 'unknown')}</strong></div>
           <div class="diagnostics-row"><span>复制快捷键</span><strong>${escapeHtml(diagnostics.copyShortcutName || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>快捷键复制尝试</span><strong>${diagnostics.copyShortcutTried ? '已尝试' : '未尝试'}</strong></div>
+          <div class="diagnostics-row"><span>Guard 已评估</span><strong>${diagnostics.guardEvaluated ? '是' : '否'}</strong></div>
           <div class="diagnostics-row"><span>Guard 状态</span><strong>${diagnostics.shortcutGuardPassed ? '已通过' : '未通过'}</strong></div>
+          <div class="diagnostics-row"><span>Native 延迟</span><strong>${escapeHtml(diagnostics.nativeLatencyMs ? `${diagnostics.nativeLatencyMs} ms` : '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>Popup 延迟</span><strong>${escapeHtml(diagnostics.popupLatencyMs ? `${diagnostics.popupLatencyMs} ms` : '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>Popup 快路径</span><strong>${diagnostics.popupFastPathUsed ? '已启用' : '未启用'}</strong></div>
           <div class="diagnostics-row"><span>最近触发</span><strong>${escapeHtml(diagnostics.lastReason || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>源进程 PID</span><strong>${escapeHtml(diagnostics.sourceProcessId || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程</span><strong>${escapeHtml(diagnostics.processName || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程路径</span><strong>${escapeHtml(diagnostics.processPath || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>当前前台进程</span><strong>${escapeHtml(diagnostics.currentForegroundProcessName || '暂无')}</strong></div>
@@ -2411,7 +2464,7 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>翻译缓存条数</span><strong>${escapeHtml(String(diagnostics.translationCacheEntries || 0))}</strong></div>
           <div class="diagnostics-row wide"><span>总工作集</span><strong>${escapeHtml(formatMemoryBucket(diagnostics.memory?.total))}</strong></div>
           <div class="diagnostics-row wide"><span>AI 最近状态</span><strong>${escapeHtml(diagnostics.aiLastStateReason || '暂无')}</strong></div>
-          <div class="diagnostics-row wide"><span>Guard 原因</span><strong>${escapeHtml(diagnostics.shortcutSkipReason || '暂无')}</strong></div>
+          <div class="diagnostics-row wide"><span>Guard 原因</span><strong>${escapeHtml(diagnostics.guardRejectedReason || diagnostics.shortcutSkipReason || '暂无')}</strong></div>
           <div class="diagnostics-row wide"><span>最近错误</span><strong>${escapeHtml(diagnostics.lastError || '暂无')}</strong></div>
         </div>
         <div class="field-hint">启用后会把关键操作写入程序目录 <code>data/logs/selectpop.log</code>，方便确认 helper 有没有触发、有没有读到文本。</div>
@@ -3497,6 +3550,16 @@ elements.content.addEventListener('change', (event) => {
       ? selectionField.checked
       : selectionField.value;
 
+    if (field === 'toolbar_size_preset') {
+      setSelectionDraftField(field, value);
+      setSelectionDraftField('toolbar_scale_percent', getToolbarScalePercentForPreset(value));
+      renderContent();
+      void persistSelectionDraft('划词设置已更新。').catch((error) => {
+        setStatus(error.message || String(error), 'error', true);
+      });
+      return;
+    }
+
     setSelectionDraftField(field, value);
 
     if (
@@ -3785,6 +3848,11 @@ elements.content.addEventListener('input', (event) => {
     const { selectionField: field } = selectionField.dataset;
     const value = selectionField.type === 'checkbox' ? selectionField.checked : selectionField.value;
     setSelectionDraftField(field, value);
+
+    if (field === 'toolbar_scale_percent') {
+      return;
+    }
+
     return;
   }
 

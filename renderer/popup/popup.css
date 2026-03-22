@@ -8,6 +8,24 @@
   --tooltip-border: rgba(19, 23, 31, 0.12);
   --tooltip-text: #172033;
   --toolbar-icon-filter: brightness(0) saturate(100%);
+  --toolbar-shell-padding-x: 4px;
+  --toolbar-shell-padding-top: 4px;
+  --toolbar-shell-padding-bottom: 48px;
+  --toolbar-padding: 6px;
+  --toolbar-gap: 4px;
+  --toolbar-button-size: 36px;
+  --toolbar-button-radius: 10px;
+  --toolbar-radius: 14px;
+  --toolbar-icon-size: 20px;
+  --tooltip-gap: 6px;
+  --tooltip-font-size: 12px;
+  --tooltip-padding-x: 10px;
+  --tooltip-padding-y: 7px;
+  --tooltip-max-width: 220px;
+  --tooltip-radius: 14px;
+  --tooltip-inset: 8px;
+  --tooltip-translate-y: 6px;
+  --toolbar-inner-height: calc(var(--toolbar-padding) * 2 + var(--toolbar-button-size));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -44,7 +62,10 @@ body {
 .toolbar-shell {
   position: relative;
   display: inline-flex;
-  padding: 4px 4px 68px;
+  padding:
+    var(--toolbar-shell-padding-top)
+    var(--toolbar-shell-padding-x)
+    var(--toolbar-shell-padding-bottom);
   transform-origin: center bottom;
   animation: toolbar-in 120ms ease-out;
 }
@@ -52,11 +73,11 @@ body {
 .toolbar {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px;
+  gap: var(--toolbar-gap);
+  padding: var(--toolbar-padding);
   overflow: visible;
   border: 1px solid var(--toolbar-border);
-  border-radius: 14px;
+  border-radius: var(--toolbar-radius);
   background: var(--toolbar-bg);
   backdrop-filter: blur(16px);
   box-shadow: none;
@@ -64,13 +85,13 @@ body {
 
 .tool-button {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: var(--toolbar-button-size);
+  height: var(--toolbar-button-size);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--toolbar-button-radius);
   background: transparent;
   color: var(--toolbar-text);
   cursor: pointer;
@@ -83,8 +104,8 @@ body {
 }
 
 .tool-button img {
-  width: 20px;
-  height: 20px;
+  width: var(--toolbar-icon-size);
+  height: var(--toolbar-icon-size);
   filter: var(--toolbar-icon-filter);
 }
 
@@ -96,15 +117,15 @@ body {
 .toolbar-tooltip {
   position: absolute;
   left: 0;
-  bottom: 6px;
+  top: calc(var(--toolbar-shell-padding-top) + var(--toolbar-inner-height) + var(--tooltip-gap));
   width: max-content;
-  max-width: 220px;
-  padding: 7px 10px;
+  max-width: var(--tooltip-max-width);
+  padding: var(--tooltip-padding-y) var(--tooltip-padding-x);
   border: 1px solid var(--tooltip-border);
-  border-radius: 14px;
+  border-radius: var(--tooltip-radius);
   background: var(--tooltip-bg);
   color: var(--tooltip-text);
-  font-size: 12px;
+  font-size: var(--tooltip-font-size);
   line-height: 1.35;
   white-space: normal;
   text-align: center;
@@ -112,7 +133,7 @@ body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease, transform 120ms ease;
-  transform: translateX(-50%) translateY(6px);
+  transform: translateX(-50%) translateY(var(--tooltip-translate-y));
 }
 
 .toolbar-tooltip:not([hidden]) {

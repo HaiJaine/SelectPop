@@ -33,6 +33,38 @@ test('selection normalization backfills toolbar auto-hide seconds to zero', () =
   assert.equal(normalized.selection.toolbar_auto_hide_seconds, 0);
 });
 
+test('selection normalization backfills toolbar size fields with the new compact default', () => {
+  const normalized = __test__.normalizeConfig({
+    version: 21,
+    selection: {
+      mode: 'auto'
+    }
+  });
+
+  assert.equal(normalized.selection.toolbar_size_preset, 'default');
+  assert.equal(normalized.selection.toolbar_scale_percent, 92);
+});
+
+test('selection normalization clamps invalid toolbar size settings', () => {
+  const normalized = __test__.normalizeConfig({
+    selection: {
+      toolbar_size_preset: 'huge',
+      toolbar_scale_percent: 999
+    }
+  });
+  const invalidPercent = __test__.normalizeConfig({
+    selection: {
+      toolbar_size_preset: 'compact',
+      toolbar_scale_percent: 'abc'
+    }
+  });
+
+  assert.equal(normalized.selection.toolbar_size_preset, 'default');
+  assert.equal(normalized.selection.toolbar_scale_percent, 125);
+  assert.equal(invalidPercent.selection.toolbar_size_preset, 'compact');
+  assert.equal(invalidPercent.selection.toolbar_scale_percent, 84);
+});
+
 test('selection normalization clamps invalid toolbar auto-hide seconds to zero', () => {
   const negative = __test__.normalizeConfig({
     selection: {

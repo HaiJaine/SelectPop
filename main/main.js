@@ -148,14 +148,23 @@ function createEmptyDiagnostics() {
     focusKind: 'unknown',
     copyShortcutTried: false,
     copyShortcutName: '',
+    guardEvaluated: false,
     shortcutGuardPassed: false,
+    guardRejectedReason: '',
     shortcutSkipReason: '',
     clipboardChanged: false,
     clipboardRestored: false,
+    fallbackStage: 'none',
     resolvedRegion: null,
     finalSelectionStrategy: '',
     lastReason: '',
     lastError: '',
+    sourceProcessId: 0,
+    sourceHwnd: 0,
+    capturedAtTick: 0,
+    nativeLatencyMs: 0,
+    popupLatencyMs: 0,
+    popupFastPathUsed: false,
     processName: '',
     processPath: '',
     windowTitle: '',
@@ -774,7 +783,8 @@ async function showPopupForSelection({
   mouse = null,
   anchorRect = null,
   flowId = 0,
-  fingerprint = ''
+  fingerprint = '',
+  selectionStartedAtMs = 0
 } = {}) {
   if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
     return false;
@@ -815,11 +825,6 @@ async function showPopupForSelection({
           point: captureLiveCursorDip(helperMouseDip) || helperMouseDip || { x: 0, y: 0 },
           source: 'live-cursor-dip'
         };
-  const decoratedTools = await decorateToolsForUi(tools);
-
-  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
-    return false;
-  }
 
   if (!selectionPopupController.shouldShow({ flowId, fingerprint })) {
     appLogger.info('popup', 'Popup request deduplicated or superseded.', {
@@ -831,7 +836,7 @@ async function showPopupForSelection({
 
   await popupManager.show({
     selectedText,
-    tools: decoratedTools,
+    tools,
     mouse,
     anchorPoint: popupAnchor.point,
     anchorSource: popupAnchor.source,
@@ -845,6 +850,18 @@ async function showPopupForSelection({
   }
 
   selectionPopupController.markShown(fingerprint);
+  void decorateToolsForUi(tools)
+    .then((decoratedTools) => {
+      if (!globalEnabled || !selectionPopupController.isCurrent(flowId) || !popupManager.isVisible()) {
+        return;
+      }
+      popupManager.updateTools(decoratedTools);
+    })
+    .catch((error) => {
+      appLogger.warn('popup', 'Failed to decorate popup tools after fast-path show.', {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
   const popupContext = popupManager.getContext?.() || {};
   appLogger.info('popup', 'Popup shown for selected text.', {
     toolCount: tools.length,
@@ -856,9 +873,15 @@ async function showPopupForSelection({
     liveCursorDip: popupContext.anchorPoint || null,
     helperLiveDelta: popupContext.helperLiveDelta || null,
     displayScaleFactor: popupContext.displayScaleFactor || null,
+    popupLatencyMs: selectionStartedAtMs > 0 ? Date.now() - selectionStartedAtMs : 0,
     bounds: popupManager.getBounds()
   });
   return true;
+}
+
+function hasBlockingSelectPopForeground() {
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  return Boolean(focusedWindow && !focusedWindow.isDestroyed());
 }
 
 async function resolveSelectionContext(diagnostics = {}) {
@@ -870,33 +893,41 @@ async function resolveSelectionContext(diagnostics = {}) {
   });
 }
 
-async function abortSelectionPopup({
+function schedulePopupForegroundVerification({
   diagnostics = {},
-  selectionContext = {},
-  stage = 'before-popup'
+  flowId = 0
 } = {}) {
-  const mergedDiagnostics = {
-    ...(diagnostics || {}),
-    processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
-    processPath: selectionContext.sourceProcessPath || diagnostics?.processPath || '',
-    windowTitle: selectionContext.sourceWindowTitle || diagnostics?.windowTitle || '',
-    currentForegroundProcessName: selectionContext.currentProcessName || '',
-    currentForegroundProcessPath: selectionContext.currentProcessPath || '',
-    currentForegroundWindowTitle: selectionContext.currentWindowTitle || '',
-    lastError: selectionContext.rejectionReason || diagnostics?.lastError || ''
-  };
+  void (async () => {
+    const selectionContext = await resolveSelectionContext(diagnostics);
 
-  await syncDiagnosticsSnapshot(mergedDiagnostics);
-  appLogger.info('selection', 'Skipped popup because foreground changed before popup could be shown.', {
-    stage,
-    rejectionCode: selectionContext.rejectionCode || '',
-    reason: mergedDiagnostics.lastError,
-    processName: mergedDiagnostics.processName,
-    processPath: mergedDiagnostics.processPath,
-    currentForegroundProcessName: mergedDiagnostics.currentForegroundProcessName,
-    currentForegroundProcessPath: mergedDiagnostics.currentForegroundProcessPath
+    if (!selectionPopupController.isCurrent(flowId) || !popupManager.isVisible()) {
+      return;
+    }
+
+    if (selectionContext.allowPopup) {
+      return;
+    }
+
+    selectionPopupController.invalidate();
+    popupManager.hide();
+    void syncDiagnosticsSnapshot({
+      ...(diagnostics || {}),
+      currentForegroundProcessName: selectionContext.currentProcessName || '',
+      currentForegroundProcessPath: selectionContext.currentProcessPath || '',
+      currentForegroundWindowTitle: selectionContext.currentWindowTitle || '',
+      lastError: selectionContext.rejectionReason || diagnostics?.lastError || ''
+    });
+    appLogger.info('selection', 'Hid popup after asynchronous foreground verification failed.', {
+      rejectionCode: selectionContext.rejectionCode || '',
+      reason: selectionContext.rejectionReason || '',
+      processName: diagnostics?.processName || '',
+      currentForegroundProcessName: selectionContext.currentProcessName || ''
+    });
+  })().catch((error) => {
+    appLogger.warn('selection', 'Foreground verification after popup show failed.', {
+      message: error instanceof Error ? error.message : String(error)
+    });
   });
-  return false;
 }
 
 async function handleHelperSelection({
@@ -905,24 +936,11 @@ async function handleHelperSelection({
   strategy = '',
   mouse = null,
   anchorRect = null,
-  flowId = 0
+  flowId = 0,
+  selectionStartedAtMs = 0
 } = {}) {
   if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
     return false;
-  }
-
-  const selectionContext = await resolveSelectionContext(diagnostics);
-
-  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
-    return false;
-  }
-
-  if (!selectionContext.allowPopup) {
-    return abortSelectionPopup({
-      diagnostics,
-      selectionContext,
-      stage: 'before-selection'
-    });
   }
 
   let selectedText = String(helperText || '').trim();
@@ -930,24 +948,19 @@ async function handleHelperSelection({
   let resolvedAnchorRect = anchorRect;
   const mergedDiagnostics = {
     ...(diagnostics || {}),
-    processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
-    processPath: selectionContext.sourceProcessPath || diagnostics?.processPath || '',
-    windowTitle: selectionContext.sourceWindowTitle || diagnostics?.windowTitle || '',
-    currentForegroundProcessName: selectionContext.currentProcessName || '',
-    currentForegroundProcessPath: selectionContext.currentProcessPath || '',
-    currentForegroundWindowTitle: selectionContext.currentWindowTitle || '',
+    processName: diagnostics?.processName || '',
+    processPath: diagnostics?.processPath || '',
+    windowTitle: diagnostics?.windowTitle || '',
     captureSource: diagnostics?.captureSource || '',
+    fallbackStage: diagnostics?.fallbackStage || 'none',
     focusKind: diagnostics?.focusKind || 'unknown',
     finalSelectionStrategy,
     selectionLength: selectedText.length,
+    popupFastPathUsed: true,
     lastError: selectedText ? '' : diagnostics?.lastError || '没有可用的选中文本。'
   };
 
-  await syncDiagnosticsSnapshot(mergedDiagnostics);
-
-  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
-    return false;
-  }
+  void syncDiagnosticsSnapshot(mergedDiagnostics);
 
   if (!selectedText) {
     appLogger.warn('selection', 'Native helper produced no usable text.', {
@@ -959,23 +972,13 @@ async function handleHelperSelection({
     return false;
   }
 
-  const popupSelectionContext = await resolveSelectionContext(mergedDiagnostics);
-
-  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+  if (hasBlockingSelectPopForeground()) {
+    appLogger.info('selection', 'Skipped popup fast-path because a SelectPop window is focused.', {
+      processName: mergedDiagnostics.processName,
+      processPath: mergedDiagnostics.processPath
+    });
     return false;
   }
-
-  if (!popupSelectionContext.allowPopup) {
-    return abortSelectionPopup({
-      diagnostics: mergedDiagnostics,
-      selectionContext: popupSelectionContext,
-      stage: 'before-show'
-    });
-  }
-
-  mergedDiagnostics.currentForegroundProcessName = popupSelectionContext.currentProcessName || '';
-  mergedDiagnostics.currentForegroundProcessPath = popupSelectionContext.currentProcessPath || '';
-  mergedDiagnostics.currentForegroundWindowTitle = popupSelectionContext.currentWindowTitle || '';
 
   const fingerprint = buildSelectionPopupFingerprint({
     diagnostics: mergedDiagnostics,
@@ -992,8 +995,20 @@ async function handleHelperSelection({
     mouse,
     anchorRect: resolvedAnchorRect,
     flowId,
-    fingerprint
+    fingerprint,
+    selectionStartedAtMs
   });
+
+  if (shown) {
+    mergedDiagnostics.popupLatencyMs = selectionStartedAtMs > 0 ? Date.now() - selectionStartedAtMs : 0;
+    void syncDiagnosticsSnapshot(mergedDiagnostics);
+    schedulePopupForegroundVerification({
+      diagnostics: mergedDiagnostics,
+      flowId
+    });
+  }
+
+  return shown;
 }
 
 function applyLaunchOnBoot(config) {
@@ -1653,6 +1668,7 @@ function registerNativeEvents() {
       return;
     }
     const flowId = selectionPopupController.beginFlow();
+    const selectionStartedAtMs = Date.now();
     try {
       await handleHelperSelection({
         helperText: payload.text,
@@ -1660,7 +1676,8 @@ function registerNativeEvents() {
         strategy: payload.strategy || diagnostics?.lastStrategy || '',
         mouse: payload.mouse || { x: 0, y: 0 },
         anchorRect: payload.anchorRect || null,
-        flowId
+        flowId,
+        selectionStartedAtMs
       });
     } catch (error) {
       appLogger.error('popup', 'Failed to show popup from native helper.', error);
@@ -1696,17 +1713,10 @@ function registerNativeEvents() {
       void syncDiagnosticsSnapshot(diagnostics);
       return;
     }
-    const flowId = selectionPopupController.beginFlow();
     appLogger.warn('selection', 'Selection read failed.', diagnostics);
-    void handleHelperSelection({
-      helperText: '',
-      diagnostics,
-      strategy: diagnostics?.lastStrategy || '',
-      mouse: null,
-      anchorRect: null,
-      flowId
-    }).catch((error) => {
-      appLogger.error('selection', 'Selection handling after helper failure failed.', error);
+    void syncDiagnosticsSnapshot({
+      ...diagnostics,
+      popupFastPathUsed: false
     });
   });
 }
@@ -1753,6 +1763,16 @@ app.whenReady().then(async () => {
     return;
   }
   refreshTrayMenu(config);
+  void popupManager.ensureWindow().catch((error) => {
+    appLogger.warn('popup', 'Failed to prewarm popup window.', {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  });
+  void getIconService().catch((error) => {
+    appLogger.warn('icons', 'Failed to prewarm icon service.', {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  });
   scheduleStartupIdleSample();
   triggerStartupWebDavSync();
 

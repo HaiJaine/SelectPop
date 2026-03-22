@@ -1,4 +1,5 @@
 import { resolveIconAssetName } from '../shared/icons.js';
+import { buildToolbarMetrics } from '../../shared/toolbar-metrics.js';
 
 const toolbarElement = document.querySelector('#toolbar');
 const shellElement = document.querySelector('.toolbar-shell');
@@ -6,6 +7,7 @@ const tooltipElement = document.querySelector('#toolbar-tooltip');
 const iconBasePath = '../../assets/icons';
 let executing = false;
 let tooltipTargetId = '';
+let currentMetrics = buildToolbarMetrics();
 
 function notifyActivity(type = 'interaction') {
   window.popupApi.notifyActivity({ type });
@@ -63,6 +65,29 @@ function hideTooltip() {
   tooltipElement.style.left = '0px';
 }
 
+function applyMetrics(metrics = buildToolbarMetrics()) {
+  currentMetrics = metrics;
+  const rootStyle = document.documentElement.style;
+
+  rootStyle.setProperty('--toolbar-shell-padding-x', `${metrics.shellPaddingX}px`);
+  rootStyle.setProperty('--toolbar-shell-padding-top', `${metrics.shellPaddingTop}px`);
+  rootStyle.setProperty('--toolbar-shell-padding-bottom', `${metrics.shellPaddingBottom}px`);
+  rootStyle.setProperty('--toolbar-padding', `${metrics.padding}px`);
+  rootStyle.setProperty('--toolbar-gap', `${metrics.gap}px`);
+  rootStyle.setProperty('--toolbar-button-size', `${metrics.buttonSize}px`);
+  rootStyle.setProperty('--toolbar-button-radius', `${metrics.buttonRadius}px`);
+  rootStyle.setProperty('--toolbar-radius', `${metrics.toolbarRadius}px`);
+  rootStyle.setProperty('--toolbar-icon-size', `${metrics.iconSize}px`);
+  rootStyle.setProperty('--tooltip-gap', `${metrics.tooltipGap}px`);
+  rootStyle.setProperty('--tooltip-font-size', `${metrics.tooltipFontSize}px`);
+  rootStyle.setProperty('--tooltip-padding-x', `${metrics.tooltipPaddingX}px`);
+  rootStyle.setProperty('--tooltip-padding-y', `${metrics.tooltipPaddingY}px`);
+  rootStyle.setProperty('--tooltip-max-width', `${metrics.tooltipMaxWidth}px`);
+  rootStyle.setProperty('--tooltip-radius', `${metrics.tooltipRadius}px`);
+  rootStyle.setProperty('--tooltip-inset', `${metrics.tooltipInset}px`);
+  rootStyle.setProperty('--tooltip-translate-y', `${metrics.tooltipTranslateY}px`);
+}
+
 function showTooltip(button) {
   const label = button?.getAttribute('aria-label');
 
@@ -80,8 +105,9 @@ function showTooltip(button) {
     const buttonRect = button.getBoundingClientRect();
     const tooltipRect = tooltipElement.getBoundingClientRect();
     const relativeCenter = buttonRect.left - shellRect.left + buttonRect.width / 2;
-    const maxLeft = Math.max(tooltipRect.width / 2 + 8, shellRect.width - tooltipRect.width / 2 - 8);
-    const nextLeft = clamp(relativeCenter, tooltipRect.width / 2 + 8, maxLeft);
+    const minLeft = tooltipRect.width / 2 + currentMetrics.tooltipInset;
+    const maxLeft = Math.max(minLeft, shellRect.width - tooltipRect.width / 2 - currentMetrics.tooltipInset);
+    const nextLeft = clamp(relativeCenter, minLeft, maxLeft);
 
     tooltipElement.style.left = `${Math.round(nextLeft)}px`;
   });
@@ -189,8 +215,22 @@ shellElement.addEventListener('mouseleave', () => {
   notifyActivity('hover-leave');
 });
 
+window.addEventListener('resize', () => {
+  if (!tooltipTargetId) {
+    return;
+  }
+
+  const activeButton = toolbarElement.querySelector(`[data-tool-id="${CSS.escape(tooltipTargetId)}"]`);
+
+  if (activeButton) {
+    showTooltip(activeButton);
+  }
+});
+
+applyMetrics(currentMetrics);
 window.popupApi.getTools().then(renderTools);
 window.popupApi.onState((payload) => {
+  applyMetrics(payload?.metrics || buildToolbarMetrics());
   renderTools(payload.tools);
 
   if (tooltipTargetId) {

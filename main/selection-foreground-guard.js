@@ -18,6 +18,7 @@ export function buildSelectionForegroundContext({
   foregroundWindow = null,
   appProcessId = 0
 } = {}) {
+  const sourceProcessId = Number(diagnostics?.sourceProcessId || 0);
   const sourceProcessName = canonicalizeProcessName(diagnostics?.processName || '');
   const sourceProcessPath = normalizeExePath(diagnostics?.processPath || '');
   const sourceWindowTitle = normalizeWindowTitle(diagnostics?.windowTitle || '');
@@ -35,6 +36,10 @@ export function buildSelectionForegroundContext({
     allowPopup = false;
     rejectionCode = 'self-foreground';
     rejectionReason = 'Foreground switched to SelectPop before popup could be shown.';
+  } else if (sourceProcessId > 0 && currentProcessId > 0 && sourceProcessId !== currentProcessId) {
+    allowPopup = false;
+    rejectionCode = 'foreground-switched';
+    rejectionReason = 'Foreground process changed before popup could be shown.';
   } else if (sourceProcessPath && currentProcessPath && sourceProcessPath !== currentProcessPath) {
     allowPopup = false;
     rejectionCode = 'foreground-switched';
@@ -49,6 +54,7 @@ export function buildSelectionForegroundContext({
     allowPopup,
     rejectionCode,
     rejectionReason,
+    sourceProcessId,
     sourceProcessName,
     sourceProcessPath,
     sourceWindowTitle,

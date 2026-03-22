@@ -9,6 +9,7 @@ import {
 test('allows popup when helper source and current foreground are the same process', () => {
   const result = buildSelectionForegroundContext({
     diagnostics: {
+      sourceProcessId: 4321,
       processName: 'Code.exe',
       processPath: 'C:\\Apps\\Code\\Code.exe',
       windowTitle: 'Source Window'
@@ -25,8 +26,31 @@ test('allows popup when helper source and current foreground are the same proces
   });
 
   assert.equal(result.allowPopup, true);
+  assert.equal(result.sourceProcessId, 4321);
   assert.equal(result.sourceProcessName, 'code.exe');
   assert.equal(result.currentProcessPath, 'c:\\apps\\code\\code.exe');
+});
+
+test('rejects popup when helper source pid and current foreground pid differ', () => {
+  const result = buildSelectionForegroundContext({
+    diagnostics: {
+      sourceProcessId: 4321,
+      processName: 'code.exe',
+      processPath: 'C:\\Apps\\Code\\Code.exe'
+    },
+    foregroundWindow: {
+      title: 'Code',
+      owner: {
+        processId: 9876,
+        name: 'code.exe',
+        path: 'C:\\Apps\\Code\\Code.exe'
+      }
+    },
+    appProcessId: 999
+  });
+
+  assert.equal(result.allowPopup, false);
+  assert.equal(result.rejectionCode, 'foreground-switched');
 });
 
 test('rejects popup when foreground switches to SelectPop itself', () => {

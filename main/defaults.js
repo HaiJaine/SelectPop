@@ -1,5 +1,5 @@
 export const APP_NAME = 'SelectPop';
-export const CONFIG_VERSION = 21;
+export const CONFIG_VERSION = 22;
 export const BUILTIN_COPY_TOOL_ID = 'tool-copy';
 
 export const BUILTIN_ICON_IDS = [
@@ -110,6 +110,8 @@ export const DEFAULT_CONFIG = Object.freeze({
       x: 0,
       y: 0
     },
+    toolbar_size_preset: 'default',
+    toolbar_scale_percent: 92,
     toolbar_auto_hide_seconds: 0,
     proxy: {
       mode: 'system'

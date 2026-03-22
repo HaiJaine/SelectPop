@@ -1,84 +1,26 @@
 import { BrowserWindow, screen } from 'electron';
 import { resolveAppFile } from './paths.js';
 import { PopupAutoHideController, normalizeAutoHideDelay } from './popup-auto-hide.js';
-
-const TOOL_BUTTON_SIZE = 36;
-const TOOLBAR_GAP = 4;
-const TOOLBAR_PADDING = 6;
-const TOOLBAR_SHELL_PADDING = 4;
-const TOOLTIP_SAFE_HEIGHT = 70;
-const TOOLBAR_INNER_HEIGHT = TOOLBAR_PADDING * 2 + TOOL_BUTTON_SIZE;
-const TOOLBAR_WINDOW_HEIGHT = TOOLBAR_SHELL_PADDING * 2 + TOOLBAR_INNER_HEIGHT + TOOLTIP_SAFE_HEIGHT;
-const POPUP_MOUSE_GAP_X = 10;
-const POPUP_MOUSE_GAP_Y = 8;
+import { buildToolbarMetrics } from '../shared/toolbar-metrics.js';
+import { calcPopupPositionForDisplay, calcPopupWidth } from './popup-layout.js';
 
 const DEFAULT_DESTROY_AFTER_IDLE_MS = 60_000;
-
-function calcPopupWidth(toolCount) {
-  const buttonWidth = toolCount * TOOL_BUTTON_SIZE;
-  const gapWidth = Math.max(0, toolCount - 1) * TOOLBAR_GAP;
-  const chromeWidth = TOOLBAR_SHELL_PADDING * 2 + TOOLBAR_PADDING * 2;
-  return Math.max(TOOLBAR_INNER_HEIGHT, chromeWidth + buttonWidth + gapWidth);
-}
-
-function clampHorizontal(left, displayX, displayWidth, visibleWidth) {
-  let nextLeft = left;
-
-  if (nextLeft < displayX) {
-    nextLeft = displayX + 4;
-  }
-
-  if (nextLeft + visibleWidth > displayX + displayWidth) {
-    nextLeft = displayX + displayWidth - visibleWidth - 4;
-  }
-
-  return nextLeft;
-}
-
-function clampVertical(top, displayY, displayHeight, visibleHeight) {
-  let nextTop = top;
-
-  if (nextTop < displayY) {
-    nextTop = displayY + 4;
-  }
-
-  if (nextTop + visibleHeight > displayY + displayHeight) {
-    nextTop = displayY + displayHeight - visibleHeight - 4;
-  }
-
-  return nextTop;
-}
 
 export function calcPopupPosition(
   mousePoint,
   winWidth,
-  windowHeight,
+  metrics,
   toolbarOffset = { x: 0, y: 0 }
 ) {
   const display = screen.getDisplayNearestPoint(mousePoint);
-  const { x, y, width, height } = display.workArea;
-  const offsetX = Number.isFinite(Number(toolbarOffset?.x)) ? Number(toolbarOffset.x) : 0;
-  const offsetY = Number.isFinite(Number(toolbarOffset?.y)) ? Number(toolbarOffset.y) : 0;
-  const visibleWidth = Math.max(1, winWidth - TOOLBAR_SHELL_PADDING * 2);
-  const visibleHeight = TOOLBAR_INNER_HEIGHT;
-
-  let visibleLeft = Math.round(mousePoint.x + POPUP_MOUSE_GAP_X + offsetX);
-  let visibleTop = Math.round(mousePoint.y + POPUP_MOUSE_GAP_Y + offsetY);
-
-  visibleLeft = clampHorizontal(visibleLeft, x, width, visibleWidth);
-  visibleTop = clampVertical(visibleTop, y, height, visibleHeight);
-
-  return {
-    x: Math.round(visibleLeft - TOOLBAR_SHELL_PADDING),
-    y: Math.round(visibleTop - TOOLBAR_SHELL_PADDING),
-    visibleBounds: {
-      x: visibleLeft,
-      y: visibleTop,
-      width: visibleWidth,
-      height: visibleHeight
-    },
-    displayScaleFactor: display.scaleFactor
-  };
+  return calcPopupPositionForDisplay(
+    mousePoint,
+    winWidth,
+    metrics,
+    display.workArea,
+    toolbarOffset,
+    display.scaleFactor
+  );
 }
 
 function normalizePoint(point) {
@@ -141,6 +83,10 @@ export class PopupManager {
     return normalizeAutoHideDelay(seconds > 0 ? seconds * 1000 : 0);
   }
 
+  getToolbarMetrics() {
+    return buildToolbarMetrics(this.getConfig?.()?.selection);
+  }
+
   async ensureWindow() {
     this.clearDestroyTimer();
 
@@ -153,7 +99,7 @@ export class PopupManager {
     });
     this.window = new BrowserWindow({
       width: 10,
-      height: TOOLBAR_WINDOW_HEIGHT,
+      height: this.getToolbarMetrics().windowHeight,
       useContentSize: true,
       frame: false,
       transparent: true,
@@ -200,8 +146,9 @@ export class PopupManager {
   }) {
     this.clearDestroyTimer();
     const window = await this.ensureWindow();
-    const width = calcPopupWidth(tools.length);
-    const height = TOOLBAR_WINDOW_HEIGHT;
+    const metrics = this.getToolbarMetrics();
+    const width = calcPopupWidth(tools.length, metrics);
+    const height = metrics.windowHeight;
     const helperMouseDip = normalizePoint(mouse) || null;
     const resolvedAnchorPoint =
       anchorPoint && Number.isFinite(anchorPoint.x) && Number.isFinite(anchorPoint.y)
@@ -212,7 +159,7 @@ export class PopupManager {
     const position = calcPopupPosition(
       resolvedAnchorPoint,
       width,
-      height,
+      metrics,
       toolbarOffset
     );
 
@@ -224,6 +171,7 @@ export class PopupManager {
       anchorSource: anchorSource || 'live-cursor-dip',
       anchorRect: normalizedAnchorRect,
       strategy,
+      metrics,
       anchorType: 'mouse-lower-right',
       usedAnchorRect: false,
       bounds: position.visibleBounds,
@@ -242,7 +190,8 @@ export class PopupManager {
     window.setBounds({ x: position.x, y: position.y, width, height });
     window.webContents.send('popup:state', {
       tools,
-      selectedText
+      selectedText,
+      metrics
     });
     window.showInactive();
     window.moveTop();
@@ -258,12 +207,27 @@ export class PopupManager {
 
     this.context = {
       ...this.context,
-      tools
+      tools,
+      metrics: this.getToolbarMetrics()
     };
 
+    const width = calcPopupWidth(tools.length, this.context.metrics);
+    const height = this.context.metrics.windowHeight;
+    const toolbarOffset = this.getConfig?.()?.selection?.toolbar_offset || { x: 0, y: 0 };
+    const anchorPoint = this.context.anchorPoint || screen.getCursorScreenPoint();
+    const position = calcPopupPosition(anchorPoint, width, this.context.metrics, toolbarOffset);
+    this.context = {
+      ...this.context,
+      anchorPoint,
+      bounds: position.visibleBounds,
+      windowBounds: { x: position.x, y: position.y, width, height },
+      displayScaleFactor: position.displayScaleFactor
+    };
+    this.window.setBounds({ x: position.x, y: position.y, width, height });
     this.window.webContents.send('popup:state', {
       tools,
-      selectedText: this.context.selectedText
+      selectedText: this.context.selectedText,
+      metrics: this.context.metrics
     });
   }
 
@@ -308,20 +272,27 @@ export class PopupManager {
       return;
     }
 
-    const width = calcPopupWidth(this.context.tools.length);
-    const height = TOOLBAR_WINDOW_HEIGHT;
+    const metrics = this.getToolbarMetrics();
+    const width = calcPopupWidth(this.context.tools.length, metrics);
+    const height = metrics.windowHeight;
     const toolbarOffset = this.getConfig?.()?.selection?.toolbar_offset || { x: 0, y: 0 };
     const anchorPoint = this.context.anchorPoint || screen.getCursorScreenPoint();
-    const position = calcPopupPosition(anchorPoint, width, height, toolbarOffset);
+    const position = calcPopupPosition(anchorPoint, width, metrics, toolbarOffset);
 
     this.context = {
       ...this.context,
       anchorPoint,
+      metrics,
       bounds: position.visibleBounds,
       windowBounds: { x: position.x, y: position.y, width, height },
       displayScaleFactor: position.displayScaleFactor
     };
     this.window.setBounds({ x: position.x, y: position.y, width, height });
+    this.window.webContents.send('popup:state', {
+      tools: this.context.tools,
+      selectedText: this.context.selectedText,
+      metrics
+    });
   }
 
   getContext() {
