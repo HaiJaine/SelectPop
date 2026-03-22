@@ -111,7 +111,8 @@ export class AiWindowManager {
       logger = null,
       saveBounds = null,
       translationCache = null,
-      onStateChanged = null
+      onStateChanged = null,
+      onWindowFocus = null
     } = {}
   ) {
     this.getConfig = getConfig;
@@ -121,6 +122,7 @@ export class AiWindowManager {
     this.saveBounds = saveBounds;
     this.translationCache = translationCache;
     this.onStateChanged = onStateChanged;
+    this.onWindowFocus = onWindowFocus;
     this.records = new Map();
   }
 
@@ -361,6 +363,7 @@ export class AiWindowManager {
       }
 
       this.promoteRecord(record, { moveTop: true });
+      this.onWindowFocus?.();
     });
     window.on('blur', () => {
       if (record.window.isDestroyed()) {

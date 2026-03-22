@@ -154,6 +154,19 @@ selectpop-risk-tests/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/build
 .PHONY : selectpop-risk-tests/fast
 
+#=============================================================================
+# Target rules for targets named selectpop-process-filter-tests
+
+# Build rule for target.
+selectpop-process-filter-tests: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 selectpop-process-filter-tests
+.PHONY : selectpop-process-filter-tests
+
+# fast build rule for target.
+selectpop-process-filter-tests/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/build
+.PHONY : selectpop-process-filter-tests/fast
+
 src/main.obj: src/main.cpp.obj
 .PHONY : src/main.obj
 
@@ -178,6 +191,33 @@ src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
+src/process-filter.obj: src/process-filter.cpp.obj
+.PHONY : src/process-filter.obj
+
+# target to build an object file
+src/process-filter.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/src/process-filter.cpp.obj
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/src/process-filter.cpp.obj
+.PHONY : src/process-filter.cpp.obj
+
+src/process-filter.i: src/process-filter.cpp.i
+.PHONY : src/process-filter.i
+
+# target to preprocess a source file
+src/process-filter.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/src/process-filter.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/src/process-filter.cpp.i
+.PHONY : src/process-filter.cpp.i
+
+src/process-filter.s: src/process-filter.cpp.s
+.PHONY : src/process-filter.s
+
+# target to generate assembly for a file
+src/process-filter.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/src/process-filter.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/src/process-filter.cpp.s
+.PHONY : src/process-filter.cpp.s
+
 src/risk-blocker.obj: src/risk-blocker.cpp.obj
 .PHONY : src/risk-blocker.obj
 
@@ -201,6 +241,30 @@ src/risk-blocker.s: src/risk-blocker.cpp.s
 src/risk-blocker.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/src/risk-blocker.cpp.s
 .PHONY : src/risk-blocker.cpp.s
+
+tests/process-filter.test.obj: tests/process-filter.test.cpp.obj
+.PHONY : tests/process-filter.test.obj
+
+# target to build an object file
+tests/process-filter.test.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/tests/process-filter.test.cpp.obj
+.PHONY : tests/process-filter.test.cpp.obj
+
+tests/process-filter.test.i: tests/process-filter.test.cpp.i
+.PHONY : tests/process-filter.test.i
+
+# target to preprocess a source file
+tests/process-filter.test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/tests/process-filter.test.cpp.i
+.PHONY : tests/process-filter.test.cpp.i
+
+tests/process-filter.test.s: tests/process-filter.test.cpp.s
+.PHONY : tests/process-filter.test.s
+
+# target to generate assembly for a file
+tests/process-filter.test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/tests/process-filter.test.cpp.s
+.PHONY : tests/process-filter.test.cpp.s
 
 tests/risk-blocker.test.obj: tests/risk-blocker.test.cpp.obj
 .PHONY : tests/risk-blocker.test.obj
@@ -235,14 +299,21 @@ help:
 	@echo ... edit_cache
 	@echo ... rebuild_cache
 	@echo ... selectpop-native-helper
+	@echo ... selectpop-process-filter-tests
 	@echo ... selectpop-risk
 	@echo ... selectpop-risk-tests
 	@echo ... src/main.obj
 	@echo ... src/main.i
 	@echo ... src/main.s
+	@echo ... src/process-filter.obj
+	@echo ... src/process-filter.i
+	@echo ... src/process-filter.s
 	@echo ... src/risk-blocker.obj
 	@echo ... src/risk-blocker.i
 	@echo ... src/risk-blocker.s
+	@echo ... tests/process-filter.test.obj
+	@echo ... tests/process-filter.test.i
+	@echo ... tests/process-filter.test.s
 	@echo ... tests/risk-blocker.test.obj
 	@echo ... tests/risk-blocker.test.i
 	@echo ... tests/risk-blocker.test.s

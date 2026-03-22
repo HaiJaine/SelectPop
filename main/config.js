@@ -27,6 +27,7 @@ import {
   inferProcessNameFromExePath,
   normalizeExePath
 } from './copy-app-rules.js';
+import { normalizeProcessList } from '../shared/process-name.js';
 
 let store;
 
@@ -374,12 +375,8 @@ function normalizeSelection(selection = {}, configVersion = 0) {
   const auxiliaryHotkey = coerceArray(selection?.auxiliary_hotkey)
     .map((key) => String(key).trim().toLowerCase())
     .filter(Boolean);
-  const blacklistExes = coerceArray(selection?.blacklist_exes)
-    .map((value) => String(value).trim().toLowerCase())
-    .filter(Boolean);
-  const whitelistExes = coerceArray(selection?.whitelist_exes)
-    .map((value) => String(value).trim().toLowerCase())
-    .filter(Boolean);
+  const blacklistExes = normalizeProcessList(coerceArray(selection?.blacklist_exes));
+  const whitelistExes = normalizeProcessList(coerceArray(selection?.whitelist_exes));
   const copyAppRules = coerceArray(selection?.copy_app_rules)
     .map((rule) => {
       const exePath = canonicalizeExePath(rule?.exe_path || '');
@@ -414,8 +411,8 @@ function normalizeSelection(selection = {}, configVersion = 0) {
   return {
     mode,
     auxiliary_hotkey: auxiliaryHotkey,
-    blacklist_exes: Array.from(new Set(blacklistExes)),
-    whitelist_exes: Array.from(new Set(whitelistExes)),
+    blacklist_exes: blacklistExes,
+    whitelist_exes: whitelistExes,
     copy_app_rules: Array.from(
       new Map(copyAppRules.map((rule) => [normalizeExePath(rule.exe_path), rule])).values()
     ),

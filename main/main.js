@@ -35,6 +35,11 @@ import { syncLaunchOnBootRegistry } from './launch-on-boot.js';
 import { NativeClient } from './native-client.js';
 import { configurePortableAppPaths, createPortablePaths, ensurePortablePaths, resolveAssetPath } from './paths.js';
 import { PopupManager } from './popup.js';
+import {
+  buildSelectionForegroundContext,
+  createInternalFocusDismissHandler,
+  shouldSkipSelectionRecovery
+} from './selection-foreground-guard.js';
 import { recoverSelectionForApp } from './selection-recovery.js';
 import { buildSelectionPopupFingerprint, createSelectionPopupController } from './selection-popup-controller.js';
 import { SelectionService } from './selection-service.js';
@@ -148,6 +153,9 @@ function createEmptyDiagnostics() {
     processName: '',
     processPath: '',
     windowTitle: '',
+    currentForegroundProcessName: '',
+    currentForegroundProcessPath: '',
+    currentForegroundWindowTitle: '',
     className: '',
     blockedRiskCategory: '',
     blockedRiskSignal: '',
@@ -159,10 +167,6 @@ function createEmptyDiagnostics() {
     helperWorkingSetBytes: 0,
     helperPrivateBytes: 0
   };
-}
-
-function hasBlockedRiskDiagnostics(diagnostics = {}) {
-  return Boolean(String(diagnostics?.blockedRiskCategory || '').trim());
 }
 
 function createHelperDisconnectedDiagnostics(baseDiagnostics = null) {
@@ -543,7 +547,8 @@ async function getAiWindowManager() {
             logger: appLogger.child('ai'),
             saveBounds: (bounds) => persistUiBounds('aiWindowBounds', bounds),
             translationCache: currentTranslationCache,
-            onStateChanged: handleAiStateChanged
+            onStateChanged: handleAiStateChanged,
+            onWindowFocus: () => dismissPopupForInternalFocus('ai-window-focus')
           }
         );
         touchAiWarm('manager-created');
@@ -863,18 +868,40 @@ function createMatchedRuleLabel(rule) {
 
 async function resolveSelectionContext(diagnostics = {}) {
   const foregroundWindow = await getForegroundWindow();
-  const processName = String(
-    foregroundWindow?.owner?.name
-      || diagnostics?.processName
-      || ''
-  ).trim().toLowerCase();
-  const processPath = String(foregroundWindow?.owner?.path || '').trim();
+  return buildSelectionForegroundContext({
+    diagnostics,
+    foregroundWindow,
+    appProcessId: process.pid
+  });
+}
 
-  return {
-    processName,
-    processPath,
-    windowTitle: String(foregroundWindow?.title || diagnostics?.windowTitle || '').trim()
+async function abortSelectionPopup({
+  diagnostics = {},
+  selectionContext = {},
+  stage = 'before-popup'
+} = {}) {
+  const mergedDiagnostics = {
+    ...(diagnostics || {}),
+    processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
+    processPath: selectionContext.sourceProcessPath || diagnostics?.processPath || '',
+    windowTitle: selectionContext.sourceWindowTitle || diagnostics?.windowTitle || '',
+    currentForegroundProcessName: selectionContext.currentProcessName || '',
+    currentForegroundProcessPath: selectionContext.currentProcessPath || '',
+    currentForegroundWindowTitle: selectionContext.currentWindowTitle || '',
+    lastError: selectionContext.rejectionReason || diagnostics?.lastError || ''
   };
+
+  await syncDiagnosticsSnapshot(mergedDiagnostics);
+  appLogger.info('selection', 'Skipped popup because foreground changed before popup could be shown.', {
+    stage,
+    rejectionCode: selectionContext.rejectionCode || '',
+    reason: mergedDiagnostics.lastError,
+    processName: mergedDiagnostics.processName,
+    processPath: mergedDiagnostics.processPath,
+    currentForegroundProcessName: mergedDiagnostics.currentForegroundProcessName,
+    currentForegroundProcessPath: mergedDiagnostics.currentForegroundProcessPath
+  });
+  return false;
 }
 
 async function handleRecoveredSelection({
@@ -895,12 +922,20 @@ async function handleRecoveredSelection({
     return false;
   }
 
+  if (!selectionContext.allowPopup) {
+    return abortSelectionPopup({
+      diagnostics,
+      selectionContext,
+      stage: 'before-recovery'
+    });
+  }
+
   const recovery = await recoverSelectionForApp({
     helperText,
     helperStrategy: strategy || diagnostics?.lastStrategy || '',
     diagnostics,
-    processName: selectionContext.processName,
-    processPath: selectionContext.processPath,
+    processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
+    processPath: selectionContext.sourceProcessPath || diagnostics?.processPath || '',
     hasRecentMouseAnchor: hasRecentMouseAnchor(),
     selectionConfig: getConfig().selection,
     selectionService,
@@ -913,9 +948,12 @@ async function handleRecoveredSelection({
 
   const mergedDiagnostics = {
     ...(diagnostics || {}),
-    processName: selectionContext.processName || diagnostics?.processName || '',
-    processPath: selectionContext.processPath || '',
-    windowTitle: selectionContext.windowTitle || diagnostics?.windowTitle || '',
+    processName: selectionContext.sourceProcessName || diagnostics?.processName || '',
+    processPath: selectionContext.sourceProcessPath || diagnostics?.processPath || '',
+    windowTitle: selectionContext.sourceWindowTitle || diagnostics?.windowTitle || '',
+    currentForegroundProcessName: selectionContext.currentProcessName || '',
+    currentForegroundProcessPath: selectionContext.currentProcessPath || '',
+    currentForegroundWindowTitle: selectionContext.currentWindowTitle || '',
     matchedCopyRule: createMatchedRuleLabel(recovery.matchedRule),
     requestedCopyMode: recovery.requestedMode,
     effectiveCopyMode: recovery.effectiveMode,
@@ -943,11 +981,29 @@ async function handleRecoveredSelection({
     return false;
   }
 
+  const popupSelectionContext = await resolveSelectionContext(mergedDiagnostics);
+
+  if (!globalEnabled || !selectionPopupController.isCurrent(flowId)) {
+    return false;
+  }
+
+  if (!popupSelectionContext.allowPopup) {
+    return abortSelectionPopup({
+      diagnostics: mergedDiagnostics,
+      selectionContext: popupSelectionContext,
+      stage: 'before-show'
+    });
+  }
+
+  mergedDiagnostics.currentForegroundProcessName = popupSelectionContext.currentProcessName || '';
+  mergedDiagnostics.currentForegroundProcessPath = popupSelectionContext.currentProcessPath || '';
+  mergedDiagnostics.currentForegroundWindowTitle = popupSelectionContext.currentWindowTitle || '';
+
   const fingerprint = buildSelectionPopupFingerprint({
     diagnostics: mergedDiagnostics,
     selectedText: recovery.text,
-    processName: selectionContext.processName,
-    processPath: selectionContext.processPath
+    processName: mergedDiagnostics.processName,
+    processPath: mergedDiagnostics.processPath
   });
 
   return showPopupForSelection({
@@ -1010,13 +1066,24 @@ async function syncLaunchOnBootPreference(
 const popupManager = new PopupManager(getConfig, {
   logger: appLogger.child('popup')
 });
-const settingsWindowManager = new SettingsWindowManager(getConfig, (bounds) => persistUiBounds('settingsBounds', bounds));
+const selectionPopupController = createSelectionPopupController({
+  dedupeWindowMs: SELECTION_POPUP_DEDUPE_WINDOW_MS
+});
+const dismissPopupForInternalFocus = createInternalFocusDismissHandler({
+  popupManager,
+  selectionPopupController,
+  logger: appLogger.child('popup')
+});
+const settingsWindowManager = new SettingsWindowManager(
+  getConfig,
+  (bounds) => persistUiBounds('settingsBounds', bounds),
+  {
+    onFocus: () => dismissPopupForInternalFocus('settings-window-focus')
+  }
+);
 const nativeClient = new NativeClient({
   appPid: process.pid,
   logger: appLogger.child('native-helper')
-});
-const selectionPopupController = createSelectionPopupController({
-  dedupeWindowMs: SELECTION_POPUP_DEDUPE_WINDOW_MS
 });
 const selectionService = new SelectionService({
   sendCopyShortcut,
@@ -1615,9 +1682,10 @@ function startHookWorker() {
 function registerNativeEvents() {
   nativeClient.on('selection-found', async (payload = {}) => {
     const diagnostics = payload.diagnostics || {};
-    if (hasBlockedRiskDiagnostics(diagnostics)) {
-      appLogger.info('selection', 'Skipped popup because helper blocked a high-risk foreground.', {
+    if (shouldSkipSelectionRecovery(diagnostics)) {
+      appLogger.info('selection', 'Skipped popup because helper blocked the foreground selection.', {
         category: diagnostics.blockedRiskCategory,
+        reason: diagnostics.lastError,
         signal: diagnostics.blockedRiskSignal,
         processName: diagnostics.processName,
         processPath: diagnostics.processPath
@@ -1657,13 +1725,15 @@ function registerNativeEvents() {
 
   nativeClient.on('selection-failed', (payload) => {
     const diagnostics = payload?.diagnostics || payload || {};
-    if (hasBlockedRiskDiagnostics(diagnostics)) {
-      appLogger.info('selection', 'Skipped recovery because helper blocked a high-risk foreground.', {
+    if (shouldSkipSelectionRecovery(diagnostics)) {
+      appLogger.info('selection', 'Skipped recovery because helper blocked the foreground selection.', {
         category: diagnostics.blockedRiskCategory,
+        reason: diagnostics.lastError,
         signal: diagnostics.blockedRiskSignal,
         processName: diagnostics.processName,
         processPath: diagnostics.processPath
       });
+      void syncDiagnosticsSnapshot(diagnostics);
       return;
     }
     const flowId = selectionPopupController.beginFlow();

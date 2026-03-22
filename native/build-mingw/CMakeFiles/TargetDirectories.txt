@@ -1,5 +1,6 @@
 D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/selectpop-risk.dir
 D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/selectpop-native-helper.dir
 D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/selectpop-risk-tests.dir
+D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/selectpop-process-filter-tests.dir
 D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/edit_cache.dir
 D:/code/tools/SelectPop/native/build-mingw/CMakeFiles/rebuild_cache.dir

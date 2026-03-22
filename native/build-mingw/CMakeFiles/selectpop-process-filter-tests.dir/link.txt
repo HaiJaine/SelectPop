@@ -1,0 +1,3 @@
+C:\dev_env\cmake\bin\cmake.exe -E rm -f CMakeFiles\selectpop-process-filter-tests.dir/objects.a
+C:\dev_env\mingw64\bin\ar.exe qc CMakeFiles\selectpop-process-filter-tests.dir/objects.a @CMakeFiles\selectpop-process-filter-tests.dir\objects1.rsp
+C:\dev_env\mingw64\bin\g++.exe -O3 -DNDEBUG -static-libgcc -static-libstdc++ -Wl,--whole-archive CMakeFiles\selectpop-process-filter-tests.dir/objects.a -Wl,--no-whole-archive -o D:\code\tools\SelectPop\native\bin\selectpop-process-filter-tests.exe -Wl,--out-implib,libselectpop-process-filter-tests.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\selectpop-process-filter-tests.dir\linkLibs.rsp

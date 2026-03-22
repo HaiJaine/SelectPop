@@ -198,3 +198,15 @@ test('selection normalization backfills copy app rules and preserves explicit en
   assert.equal(normalized.selection.copy_app_rules[0].source, 'installed');
   assert.equal(normalized.selection.copy_app_rules[0].process_name, 'reader.exe');
 });
+
+test('selection normalization canonicalizes blacklist and whitelist process names', () => {
+  const normalized = __test__.normalizeConfig({
+    selection: {
+      blacklist_exes: ['Code', 'code.exe', '"C:\\Apps\\Code.exe"', ''],
+      whitelist_exes: ['Reader', 'c:/Apps/Reader.exe', 'reader.exe']
+    }
+  });
+
+  assert.deepEqual(normalized.selection.blacklist_exes, ['code.exe']);
+  assert.deepEqual(normalized.selection.whitelist_exes, ['reader.exe']);
+});

@@ -7,6 +7,7 @@ import {
   resolveIconAssetName
 } from '../shared/icons.js';
 import { buildUrlTemplatePreview, deriveUrlToolFaviconMeta, shouldUseUrlToolFavicon } from '../../shared/url-tool.js';
+import { canonicalizeProcessName, normalizeProcessList } from '../../shared/process-name.js';
 
 const TOOL_TYPE_LABELS = {
   copy: '复制工具',
@@ -865,7 +866,7 @@ function createSelectionDraft(selection) {
           enabled: rule?.enabled !== false,
           mode: normalizeCopyAppRuleMode(rule?.mode),
           exe_path: normalizeExePath(rule?.exe_path || ''),
-          process_name: String(rule?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(rule?.exe_path || ''),
+          process_name: canonicalizeProcessName(rule?.process_name || '') || inferProcessNameFromExePath(rule?.exe_path || ''),
           source: rule?.source === 'installed' ? 'installed' : 'manual'
         }))
       : [],
@@ -887,7 +888,7 @@ function getSelectionCopyAppRules(draft = state.selectionDraft) {
 
 function createCopyAppRuleDraft(rule = null) {
   const exePath = normalizeExePath(rule?.exe_path || '');
-  const processName = String(rule?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(exePath);
+  const processName = canonicalizeProcessName(rule?.process_name || '') || inferProcessNameFromExePath(exePath);
 
   return {
     id: String(rule?.id || createClientId('copy-rule')),
@@ -902,7 +903,7 @@ function createCopyAppRuleDraft(rule = null) {
 
 function buildCopyAppRulePayload(draft) {
   const exePath = normalizeExePath(draft?.exe_path || '');
-  const processName = String(draft?.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(exePath);
+  const processName = canonicalizeProcessName(draft?.process_name || '') || inferProcessNameFromExePath(exePath);
 
   if (!exePath) {
     throw new Error('请选择有效的 exe 路径。');
@@ -1084,14 +1085,7 @@ function hasCompleteHotkey(keys) {
 }
 
 function parseLineList(text) {
-  return Array.from(
-    new Set(
-      String(text || '')
-        .split(/\r?\n/u)
-        .map((value) => value.trim().toLowerCase())
-        .filter(Boolean)
-    )
-  );
+  return normalizeProcessList(String(text || '').split(/\r?\n/u));
 }
 
 function formatLineList(values) {
@@ -2339,12 +2333,12 @@ function renderSelectionSettings() {
         <div class="field">
           <label class="field-label" for="selection-whitelist">白名单 EXE</label>
           <textarea id="selection-whitelist" data-selection-field="whitelist_text">${escapeHtml(draft.whitelist_text || '')}</textarea>
-          <div class="field-hint">每行一个进程名，例如 code.exe。留空表示不限制。</div>
+          <div class="field-hint">每行一个进程名，例如 code 或 code.exe；如果填 exe 路径，会自动提取成 exe 名。留空表示不限制。</div>
         </div>
         <div class="field">
           <label class="field-label" for="selection-blacklist">黑名单 EXE</label>
           <textarea id="selection-blacklist" data-selection-field="blacklist_text">${escapeHtml(draft.blacklist_text || '')}</textarea>
-          <div class="field-hint">这些进程中永不自动取词。</div>
+          <div class="field-hint">支持 code、code.exe 或 exe 路径；保存后会自动规范化。这些进程中永不自动取词。</div>
         </div>
       </section>
 
@@ -2384,6 +2378,9 @@ function renderSelectionSettings() {
           <div class="diagnostics-row"><span>最近触发</span><strong>${escapeHtml(diagnostics.lastReason || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程</span><strong>${escapeHtml(diagnostics.processName || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>最近进程路径</span><strong>${escapeHtml(diagnostics.processPath || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>当前前台进程</span><strong>${escapeHtml(diagnostics.currentForegroundProcessName || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>当前前台路径</span><strong>${escapeHtml(diagnostics.currentForegroundProcessPath || '暂无')}</strong></div>
+          <div class="diagnostics-row"><span>当前前台标题</span><strong>${escapeHtml(diagnostics.currentForegroundWindowTitle || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>命中高风险项</span><strong>${escapeHtml(diagnostics.blockedRiskCategory || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>命中信号</span><strong>${escapeHtml(diagnostics.blockedRiskSignal || '暂无')}</strong></div>
           <div class="diagnostics-row"><span>命中规则</span><strong>${escapeHtml(diagnostics.matchedCopyRule || '默认自动')}</strong></div>
@@ -3609,7 +3606,7 @@ elements.drawer.addEventListener('click', (event) => {
     renderDrawer();
   } else if (action === 'choose-installed-app' && state.drawer?.kind === 'copy-rule') {
     state.drawer.draft.exe_path = normalizeExePath(actionElement.dataset.exePath || '');
-    state.drawer.draft.process_name = String(actionElement.dataset.processName || '').trim().toLowerCase();
+    state.drawer.draft.process_name = canonicalizeProcessName(actionElement.dataset.processName || '');
     state.drawer.draft.label = String(actionElement.dataset.label || '').trim() || state.drawer.draft.label;
     state.drawer.draft.source = 'installed';
     renderDrawer();
@@ -3620,7 +3617,7 @@ elements.drawer.addEventListener('click', (event) => {
       }
 
       state.drawer.draft.exe_path = normalizeExePath(result.exe_path);
-      state.drawer.draft.process_name = String(result.process_name || '').trim().toLowerCase() || inferProcessNameFromExePath(result.exe_path);
+      state.drawer.draft.process_name = canonicalizeProcessName(result.process_name || '') || inferProcessNameFromExePath(result.exe_path);
       state.drawer.draft.label = String(state.drawer.draft.label || '').trim() || String(result.label || '').trim() || state.drawer.draft.process_name;
       renderDrawer();
     }).catch((error) => {

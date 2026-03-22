@@ -32,6 +32,8 @@ target_link_libraries(selectpop-native-helper
   shell32
 )
 
+target_sources(selectpop-native-helper PRIVATE src/process-filter.cpp)
+
 add_executable(selectpop-risk-tests
   tests/risk-blocker.test.cpp
 )
@@ -39,7 +41,15 @@ add_executable(selectpop-risk-tests
 target_compile_definitions(selectpop-risk-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(selectpop-risk-tests selectpop-risk)
 
+add_executable(selectpop-process-filter-tests
+  tests/process-filter.test.cpp
+  src/process-filter.cpp
+)
+
+target_compile_definitions(selectpop-process-filter-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+
 if(MINGW)
   target_link_options(selectpop-native-helper PRIVATE -static-libgcc -static-libstdc++)
   target_link_options(selectpop-risk-tests PRIVATE -static-libgcc -static-libstdc++)
+  target_link_options(selectpop-process-filter-tests PRIVATE -static-libgcc -static-libstdc++)
 endif()

@@ -5,6 +5,7 @@
 #include <oleacc.h>
 #include <psapi.h>
 
+#include "process-filter.h"
 #include "risk-blocker.h"
 
 #include <algorithm>
@@ -1360,20 +1361,7 @@ void NativeHelperApp::ApplyConfig(const std::string& payload) {
 }
 
 std::vector<std::string> NativeHelperApp::NormalizeProcessList(const std::vector<std::string>& input) {
-  std::vector<std::string> output;
-  output.reserve(input.size());
-
-  for (const auto& value : input) {
-    const std::string normalized = ToLowerAscii(TrimAscii(value));
-
-    if (!normalized.empty()) {
-      output.push_back(normalized);
-    }
-  }
-
-  std::sort(output.begin(), output.end());
-  output.erase(std::unique(output.begin(), output.end()), output.end());
-  return output;
+  return selectpop::process_filter::NormalizeProcessList(input);
 }
 
 void NativeHelperApp::HandleRawInput(HRAWINPUT raw_input_handle) {
@@ -1717,7 +1705,7 @@ ForegroundInfo NativeHelperApp::GetForegroundInfo() const {
       const auto slash = full_path.find_last_of(L"\\/");
       const std::wstring file_name = slash == std::wstring::npos ? full_path : full_path.substr(slash + 1);
       info.process_path = ToLowerAscii(WideToUtf8(full_path));
-      info.process_name = ToLowerAscii(WideToUtf8(file_name));
+      info.process_name = selectpop::process_filter::CanonicalizeProcessName(WideToUtf8(file_name));
     }
 
     CloseHandle(process);
@@ -1765,16 +1753,12 @@ bool NativeHelperApp::IsForegroundEligible(const ForegroundInfo& foreground, std
     return false;
   }
 
-  if (!config.whitelist_exes.empty() &&
-      std::find(config.whitelist_exes.begin(), config.whitelist_exes.end(), foreground.process_name) ==
-        config.whitelist_exes.end()) {
-    *reason = "Process is not in whitelist.";
-    return false;
-  }
-
-  if (std::find(config.blacklist_exes.begin(), config.blacklist_exes.end(), foreground.process_name) !=
-      config.blacklist_exes.end()) {
-    *reason = "Process is blacklisted.";
+  if (!selectpop::process_filter::IsProcessEligible(
+        foreground.process_name,
+        config.whitelist_exes,
+        config.blacklist_exes,
+        reason
+      )) {
     return false;
   }
 

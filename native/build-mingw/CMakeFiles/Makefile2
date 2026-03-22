@@ -65,12 +65,14 @@ CMAKE_BINARY_DIR = D:\code\tools\SelectPop\native\build-mingw
 all: CMakeFiles/selectpop-risk.dir/all
 all: CMakeFiles/selectpop-native-helper.dir/all
 all: CMakeFiles/selectpop-risk-tests.dir/all
+all: CMakeFiles/selectpop-process-filter-tests.dir/all
 .PHONY : all
 
 # The main recursive "codegen" target.
 codegen: CMakeFiles/selectpop-risk.dir/codegen
 codegen: CMakeFiles/selectpop-native-helper.dir/codegen
 codegen: CMakeFiles/selectpop-risk-tests.dir/codegen
+codegen: CMakeFiles/selectpop-process-filter-tests.dir/codegen
 .PHONY : codegen
 
 # The main recursive "preinstall" target.
@@ -81,6 +83,7 @@ preinstall:
 clean: CMakeFiles/selectpop-risk.dir/clean
 clean: CMakeFiles/selectpop-native-helper.dir/clean
 clean: CMakeFiles/selectpop-risk-tests.dir/clean
+clean: CMakeFiles/selectpop-process-filter-tests.dir/clean
 .PHONY : clean
 
 #=============================================================================
@@ -90,7 +93,7 @@ clean: CMakeFiles/selectpop-risk-tests.dir/clean
 CMakeFiles/selectpop-risk.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=3,4 "Built target selectpop-risk"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=7,8 "Built target selectpop-risk"
 .PHONY : CMakeFiles/selectpop-risk.dir/all
 
 # Build rule for subdir invocation for target.
@@ -107,7 +110,7 @@ selectpop-risk: CMakeFiles/selectpop-risk.dir/rule
 # codegen rule for target.
 CMakeFiles/selectpop-risk.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk.dir\build.make CMakeFiles/selectpop-risk.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=3,4 "Finished codegen for target selectpop-risk"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=7,8 "Finished codegen for target selectpop-risk"
 .PHONY : CMakeFiles/selectpop-risk.dir/codegen
 
 # clean rule for target.
@@ -122,12 +125,12 @@ CMakeFiles/selectpop-risk.dir/clean:
 CMakeFiles/selectpop-native-helper.dir/all: CMakeFiles/selectpop-risk.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=1,2 "Built target selectpop-native-helper"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=1,2,3 "Built target selectpop-native-helper"
 .PHONY : CMakeFiles/selectpop-native-helper.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/selectpop-native-helper.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start D:\code\tools\SelectPop\native\build-mingw\CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start D:\code\tools\SelectPop\native\build-mingw\CMakeFiles 5
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 CMakeFiles/selectpop-native-helper.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start D:\code\tools\SelectPop\native\build-mingw\CMakeFiles 0
 .PHONY : CMakeFiles/selectpop-native-helper.dir/rule
@@ -139,7 +142,7 @@ selectpop-native-helper: CMakeFiles/selectpop-native-helper.dir/rule
 # codegen rule for target.
 CMakeFiles/selectpop-native-helper.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-native-helper.dir\build.make CMakeFiles/selectpop-native-helper.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=1,2 "Finished codegen for target selectpop-native-helper"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=1,2,3 "Finished codegen for target selectpop-native-helper"
 .PHONY : CMakeFiles/selectpop-native-helper.dir/codegen
 
 # clean rule for target.
@@ -154,7 +157,7 @@ CMakeFiles/selectpop-native-helper.dir/clean:
 CMakeFiles/selectpop-risk-tests.dir/all: CMakeFiles/selectpop-risk.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=5,6 "Built target selectpop-risk-tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=9,10 "Built target selectpop-risk-tests"
 .PHONY : CMakeFiles/selectpop-risk-tests.dir/all
 
 # Build rule for subdir invocation for target.
@@ -171,13 +174,45 @@ selectpop-risk-tests: CMakeFiles/selectpop-risk-tests.dir/rule
 # codegen rule for target.
 CMakeFiles/selectpop-risk-tests.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=5,6 "Finished codegen for target selectpop-risk-tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=9,10 "Finished codegen for target selectpop-risk-tests"
 .PHONY : CMakeFiles/selectpop-risk-tests.dir/codegen
 
 # clean rule for target.
 CMakeFiles/selectpop-risk-tests.dir/clean:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-risk-tests.dir\build.make CMakeFiles/selectpop-risk-tests.dir/clean
 .PHONY : CMakeFiles/selectpop-risk-tests.dir/clean
+
+#=============================================================================
+# Target rules for target CMakeFiles/selectpop-process-filter-tests.dir
+
+# All Build rule for target.
+CMakeFiles/selectpop-process-filter-tests.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=4,5,6 "Built target selectpop-process-filter-tests"
+.PHONY : CMakeFiles/selectpop-process-filter-tests.dir/all
+
+# Build rule for subdir invocation for target.
+CMakeFiles/selectpop-process-filter-tests.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start D:\code\tools\SelectPop\native\build-mingw\CMakeFiles 3
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\Makefile2 CMakeFiles/selectpop-process-filter-tests.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start D:\code\tools\SelectPop\native\build-mingw\CMakeFiles 0
+.PHONY : CMakeFiles/selectpop-process-filter-tests.dir/rule
+
+# Convenience name for target.
+selectpop-process-filter-tests: CMakeFiles/selectpop-process-filter-tests.dir/rule
+.PHONY : selectpop-process-filter-tests
+
+# codegen rule for target.
+CMakeFiles/selectpop-process-filter-tests.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=D:\code\tools\SelectPop\native\build-mingw\CMakeFiles --progress-num=4,5,6 "Finished codegen for target selectpop-process-filter-tests"
+.PHONY : CMakeFiles/selectpop-process-filter-tests.dir/codegen
+
+# clean rule for target.
+CMakeFiles/selectpop-process-filter-tests.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\selectpop-process-filter-tests.dir\build.make CMakeFiles/selectpop-process-filter-tests.dir/clean
+.PHONY : CMakeFiles/selectpop-process-filter-tests.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

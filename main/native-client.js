@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import electron from 'electron';
+import { normalizeProcessList } from '../shared/process-name.js';
 
 const REQUIRED_HELPER_FILES = ['libwinpthread-1.dll'];
 const { app } = electron;
@@ -28,15 +29,7 @@ function sanitizeKeys(keys) {
 }
 
 function sanitizeStringList(values) {
-  return Array.isArray(values)
-    ? Array.from(
-        new Set(
-          values
-            .map((value) => String(value || '').trim().toLowerCase())
-            .filter(Boolean)
-        )
-      )
-    : [];
+  return normalizeProcessList(values);
 }
 
 function buildSelectionPayload(config = {}) {
@@ -389,3 +382,7 @@ export class NativeClient extends EventEmitter {
     this.pendingRequests.clear();
   }
 }
+
+export const __test__ = {
+  buildSelectionPayload
+};

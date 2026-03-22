@@ -3,9 +3,10 @@ import { resolveAppFile } from './paths.js';
 import { clampWindowBoundsToDisplay, extractWindowBounds, normalizeWindowBounds } from './window-bounds.js';
 
 export class SettingsWindowManager {
-  constructor(getConfig, saveBounds) {
+  constructor(getConfig, saveBounds, { onFocus = null } = {}) {
     this.getConfig = getConfig;
     this.saveBounds = saveBounds;
+    this.onFocus = onFocus;
     this.window = null;
     this.readyPromise = null;
     this.persistTimer = null;
@@ -54,6 +55,9 @@ export class SettingsWindowManager {
     });
     this.window.on('move', () => this.schedulePersist());
     this.window.on('resize', () => this.schedulePersist());
+    this.window.on('focus', () => {
+      this.onFocus?.();
+    });
 
     this.readyPromise = this.window.loadFile(resolveAppFile('renderer', 'settings', 'index.html'));
     await this.readyPromise;
@@ -71,6 +75,7 @@ export class SettingsWindowManager {
     }
     window.show();
     window.focus();
+    this.onFocus?.();
   }
 
   syncConfig(config) {

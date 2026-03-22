@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { NativeClient } from './native-client.js';
+import { __test__, NativeClient } from './native-client.js';
 
 function createLoggerStub() {
   return {
@@ -103,6 +103,19 @@ test('updateConfig sends config_update to an already connected helper', async ()
   assert.equal(messages[1].payload.logging_enabled, true);
 
   await client.dispose();
+});
+
+test('buildSelectionPayload canonicalizes process lists before sending config to helper', () => {
+  const payload = __test__.buildSelectionPayload({
+    selection: {
+      mode: 'auto',
+      blacklist_exes: ['Code', 'C:\\Apps\\Code.exe', 'code.exe'],
+      whitelist_exes: ['Reader', '"C:/Apps/Reader.exe"']
+    }
+  });
+
+  assert.deepEqual(payload.blacklist_exes, ['code.exe']);
+  assert.deepEqual(payload.whitelist_exes, ['reader.exe']);
 });
 
 test('readClipboardTextAfterCopy sends helper request and resolves the clipboard text', async () => {

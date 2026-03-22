@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { canonicalizeProcessName } from '../shared/process-name.js';
 
 export const COPY_APP_RULE_MODES = ['auto', 'force_copy', 'skip_copy'];
 export const COPY_APP_RULE_SOURCES = ['installed', 'manual'];
@@ -39,7 +40,7 @@ export function inferProcessNameFromExePath(exePath) {
 }
 
 export function normalizeProcessName(value, fallbackExePath = '') {
-  const normalizedValue = String(value || '').trim().toLowerCase();
+  const normalizedValue = canonicalizeProcessName(value);
 
   if (normalizedValue) {
     return normalizedValue;

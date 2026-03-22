@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   inferProcessNameFromExePath,
   normalizeExePath,
+  normalizeProcessName,
   resolveCopyAppRule,
   resolveCopyBehavior
 } from './copy-app-rules.js';
@@ -10,6 +11,13 @@ import {
 test('normalizes exe paths and infers process names', () => {
   assert.equal(normalizeExePath('C:/Program Files/App/Reader.exe'), 'c:\\program files\\app\\reader.exe');
   assert.equal(inferProcessNameFromExePath('C:/Program Files/App/Reader.exe'), 'reader.exe');
+});
+
+test('canonicalizes process names from bare names, quoted values, and paths', () => {
+  assert.equal(normalizeProcessName('Code'), 'code.exe');
+  assert.equal(normalizeProcessName('"code.exe"'), 'code.exe');
+  assert.equal(normalizeProcessName('C:/Apps/Code.exe'), 'code.exe');
+  assert.equal(normalizeProcessName('', 'C:/Apps/Reader.exe'), 'reader.exe');
 });
 
 test('matches rules by exact normalized path only', () => {
